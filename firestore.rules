@@ -1,11 +1,66 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    function signedIn() {
+      return request.auth != null;
+    }
 
-      match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isTeacherSelf(teacherId) {
+      return signedIn() && userDoc().role == 'teacher' && request.auth.uid == teacherId;
+    }
+
+    function isLinkedStudent(teacherId, studentId) {
+      return signedIn()
+        && userDoc().role == 'student'
+        && userDoc().teacherId == teacherId
+        && userDoc().studentId == studentId;
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /students/{studentId} {
+        allow read: if isTeacherSelf(userId) || isLinkedStudent(userId, studentId);
+        allow write: if isTeacherSelf(userId);
+      }
+
+      match /transactions/{transactionId} {
+        allow read: if isTeacherSelf(userId);
+        allow write: if isTeacherSelf(userId);
+      }
+
+      match /lessons/{lessonId} {
+        allow read: if isTeacherSelf(userId) || (
+          signedIn()
+          && userDoc().role == 'student'
+          && userDoc().teacherId == userId
+          && resource.data.studentId == userDoc().studentId
+        );
+        allow write: if isTeacherSelf(userId);
+      }
+
+      match /homeworks/{homeworkId} {
+        allow read: if isTeacherSelf(userId) || (
+          signedIn()
+          && userDoc().role == 'student'
+          && userDoc().teacherId == userId
+          && resource.data.studentId == userDoc().studentId
+        );
+        allow update: if isTeacherSelf(userId) || (
+          signedIn()
+          && userDoc().role == 'student'
+          && userDoc().teacherId == userId
+          && resource.data.studentId == userDoc().studentId
+        );
+        allow create, delete: if isTeacherSelf(userId);
       }
     }
   }

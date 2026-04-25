@@ -226,6 +226,18 @@
             <span>Комментарий преподавателя</span>
             <textarea name="teacherNote" rows="3"></textarea>
           </label>
+          <label class="full-width">
+            <span>Ссылка на изображение задачи</span>
+            <input name="imageUrl" placeholder="https://..." />
+          </label>
+          <label class="full-width">
+            <span>Или загрузите картинку</span>
+            <input name="imageFile" type="file" accept="image/*" />
+          </label>
+          <div class="full-width hidden" id="homeworkImagePreviewWrap">
+            <span>Предпросмотр</span>
+            <img id="homeworkImagePreview" class="task-image-preview" alt="Предпросмотр задания" />
+          </div>
         </div>
 
         <div class="modal-actions">

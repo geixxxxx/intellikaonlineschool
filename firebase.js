@@ -11,6 +11,7 @@ import {
 import {
   addDoc,
   collection,
+  collectionGroup,
   deleteDoc,
   doc,
   getDoc,
@@ -25,7 +26,7 @@ import {
   writeBatch
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
 
-const STORAGE_KEY = "intellika-demo-v3";
+const STORAGE_KEY = "intellika-demo-v4";
 const firebaseEnabled = isFirebaseConfigured(firebaseWebConfig);
 
 let firebaseAuth = null;
@@ -45,68 +46,66 @@ function createFirebaseBackend() {
     mode: "firebase",
     label: "Firebase Cloud",
     onAuthChange(callback) {
-      return onAuthStateChanged(firebaseAuth, callback);
+      return onAuthStateChanged(firebaseAuth, async (authUser) => {
+        if (!authUser) {
+          callback(null);
+          return;
+        }
+        callback(await loadFirebaseSession(authUser));
+      });
     },
     async signIn(email, password) {
       await signInWithEmailAndPassword(firebaseAuth, email, password);
     },
-    async signUp({ email, password, displayName }) {
+    async signUpTeacher({ email, password, displayName }) {
       const credential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
-      if (displayName) {
-        await updateProfile(credential.user, { displayName });
-      }
-      await setDoc(
-        doc(firebaseDb, "users", credential.user.uid),
-        {
-          displayName: displayName || "",
-          email,
-          createdAt: serverTimestamp()
-        },
-        { merge: true }
-      );
+      if (displayName) await updateProfile(credential.user, { displayName });
+      await setDoc(doc(firebaseDb, "users", credential.user.uid), {
+        role: "teacher",
+        displayName: displayName || "",
+        email,
+        createdAt: serverTimestamp()
+      });
+    },
+    async signUpStudent({ email, password, displayName, accessCode }) {
+      const link = await resolveFirebaseStudentByAccessCode(accessCode);
+      if (!link) throw new Error("Код ученика не найден.");
+
+      const credential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+      if (displayName) await updateProfile(credential.user, { displayName });
+
+      await setDoc(doc(firebaseDb, "users", credential.user.uid), {
+        role: "student",
+        email,
+        displayName: displayName || link.student.name,
+        teacherId: link.teacherId,
+        studentId: link.studentId,
+        createdAt: serverTimestamp()
+      });
+
+      await updateDoc(doc(firebaseDb, "users", link.teacherId, "students", link.studentId), {
+        studentAuthUid: credential.user.uid,
+        studentEmail: email
+      });
     },
     async signOut() {
       await signOut(firebaseAuth);
     },
     async loadData(user) {
-      return loadFirestoreData(user.uid);
+      return user.role === "teacher" ? loadTeacherData(user.uid) : loadStudentData(user.teacherId, user.studentId);
     },
     subscribeData(user, onData, onError) {
-      const targets = ["students", "transactions", "lessons", "homeworks"];
-      const store = {
-        students: [],
-        transactions: [],
-        lessons: [],
-        homeworks: []
-      };
-
-      const unsubscribers = targets.map((key) =>
-        onSnapshot(
-          collection(firebaseDb, "users", user.uid, key),
-          (snapshot) => {
-            store[key] = snapshot.docs.map((item) => ({
-              id: item.id,
-              ...item.data()
-            }));
-            onData({
-              students: [...store.students],
-              transactions: [...store.transactions],
-              lessons: [...store.lessons],
-              homeworks: [...store.homeworks]
-            });
-          },
-          onError
-        )
-      );
-
-      return () => {
-        unsubscribers.forEach((unsubscribe) => unsubscribe());
-      };
+      if (user.role === "teacher") {
+        return subscribeTeacherData(user.uid, onData, onError);
+      }
+      return subscribeStudentData(user.teacherId, user.studentId, onData, onError);
     },
     async resetDemoData(user) {
-      await replaceUserData(user.uid, createSeedData());
+      ensureTeacher(user);
+      await replaceTeacherData(user.uid, createSeedData());
     },
     async saveStudent(user, student) {
+      ensureTeacher(user);
       const payload = sanitizeStudent(student);
       const studentsRef = collection(firebaseDb, "users", user.uid, "students");
 
@@ -122,56 +121,58 @@ function createFirebaseBackend() {
       return created.id;
     },
     async savePayment(user, payment) {
+      ensureTeacher(user);
       const transactionsRef = collection(firebaseDb, "users", user.uid, "transactions");
       const studentsRef = collection(firebaseDb, "users", user.uid, "students");
       await addDoc(transactionsRef, sanitizePayment(payment));
 
       const studentRef = doc(studentsRef, payment.studentId);
-      const student = await loadStudent(studentRef);
-      const nextBalance = Number(student.balance || 0) + Number(payment.amount || 0);
-      const nextLessonsLeft =
-        Number(student.lessonsLeft || 0) + Math.floor(Number(payment.amount || 0) / Number(student.rate || 1));
-
+      const student = await loadDocData(studentRef);
       await updateDoc(studentRef, {
-        balance: nextBalance,
-        lessonsLeft: nextLessonsLeft
+        balance: Number(student.balance || 0) + Number(payment.amount || 0),
+        lessonsLeft:
+          Number(student.lessonsLeft || 0) + Math.floor(Number(payment.amount || 0) / Number(student.rate || 1))
       });
     },
     async saveLesson(user, lesson) {
-      const lessonsRef = collection(firebaseDb, "users", user.uid, "lessons");
-      const studentsRef = collection(firebaseDb, "users", user.uid, "students");
-      await addDoc(lessonsRef, sanitizeLesson(lesson));
-
+      ensureTeacher(user);
+      await addDoc(collection(firebaseDb, "users", user.uid, "lessons"), sanitizeLesson(lesson));
       if (lesson.status === "done") {
-        const studentRef = doc(studentsRef, lesson.studentId);
-        const student = await loadStudent(studentRef);
+        const studentRef = doc(firebaseDb, "users", user.uid, "students", lesson.studentId);
+        const student = await loadDocData(studentRef);
         await updateDoc(studentRef, {
-          balance: Math.max(0, Number(student.balance || 0) - Number(student.rate || 0)),
-          lessonsLeft: Math.max(0, Number(student.lessonsLeft || 0) - 1)
+          lessonsLeft: Math.max(0, Number(student.lessonsLeft || 0) - 1),
+          balance: Math.max(0, Number(student.balance || 0) - Number(student.rate || 0))
         });
       }
     },
     async saveHomework(user, homework) {
-      const homeworkRef = collection(firebaseDb, "users", user.uid, "homeworks");
+      ensureTeacher(user);
       const payload = sanitizeHomework(homework);
+      const collectionRef = collection(firebaseDb, "users", user.uid, "homeworks");
 
       if (homework.id) {
-        await updateDoc(doc(homeworkRef, homework.id), payload);
+        await updateDoc(doc(collectionRef, homework.id), payload);
         return homework.id;
       }
 
-      const created = await addDoc(homeworkRef, payload);
+      const created = await addDoc(collectionRef, payload);
       return created.id;
     },
     async updateHomeworkStatus(user, homeworkId, status) {
-      const homeworkRef = doc(firebaseDb, "users", user.uid, "homeworks", homeworkId);
+      const teacherId = user.role === "teacher" ? user.uid : user.teacherId;
+      const homeworkRef = doc(firebaseDb, "users", teacherId, "homeworks", homeworkId);
       const payload = { status };
       if (status === "reviewed") payload.progress = 100;
       await updateDoc(homeworkRef, payload);
     },
     async deleteStudent(user, studentId) {
+      ensureTeacher(user);
       const batch = writeBatch(firebaseDb);
-      batch.delete(doc(firebaseDb, "users", user.uid, "students", studentId));
+      const studentRef = doc(firebaseDb, "users", user.uid, "students", studentId);
+      const student = await loadDocData(studentRef);
+
+      batch.delete(studentRef);
 
       const related = await Promise.all([
         getDocs(query(collection(firebaseDb, "users", user.uid, "transactions"), where("studentId", "==", studentId))),
@@ -179,9 +180,11 @@ function createFirebaseBackend() {
         getDocs(query(collection(firebaseDb, "users", user.uid, "homeworks"), where("studentId", "==", studentId)))
       ]);
 
-      related.forEach((snapshot) => {
-        snapshot.forEach((item) => batch.delete(item.ref));
-      });
+      related.forEach((snapshot) => snapshot.forEach((item) => batch.delete(item.ref)));
+
+      if (student?.studentAuthUid) {
+        batch.delete(doc(firebaseDb, "users", student.studentAuthUid));
+      }
 
       await batch.commit();
     }
@@ -193,115 +196,228 @@ function createLocalBackend() {
     mode: "demo",
     label: "Demo Local",
     onAuthChange(callback) {
-      const raw = localStorage.getItem(`${STORAGE_KEY}:session`);
-      const user = raw ? JSON.parse(raw) : null;
+      const session = readLocalSession();
       localAuthListeners.add(callback);
-      queueMicrotask(() => callback(user));
+      queueMicrotask(() => callback(session));
       return () => localAuthListeners.delete(callback);
     },
     async signIn(email, password) {
       const users = readUsers();
       const found = users.find((item) => item.email === email && item.password === password);
-      if (!found) {
-        throw new Error("Неверная почта или пароль.");
-      }
-      const session = toSessionUser(found);
-      localStorage.setItem(`${STORAGE_KEY}:session`, JSON.stringify(session));
-      emitLocalAuthChange(session);
+      if (!found) throw new Error("Неверная почта или пароль.");
+      emitLocalAuthChange(toSessionUser(found));
     },
-    async signUp({ email, password, displayName }) {
+    async signUpTeacher({ email, password, displayName }) {
       const users = readUsers();
-      if (users.some((item) => item.email === email)) {
-        throw new Error("Пользователь с такой почтой уже существует.");
-      }
+      if (users.some((item) => item.email === email)) throw new Error("Этот email уже зарегистрирован.");
+      const user = { uid: makeId(), email, password, displayName, role: "teacher" };
+      users.push(user);
+      writeUsers(users);
+      writeLocalTeacherData(user.uid, createSeedData());
+      emitLocalAuthChange(toSessionUser(user));
+    },
+    async signUpStudent({ email, password, displayName, accessCode }) {
+      const users = readUsers();
+      if (users.some((item) => item.email === email)) throw new Error("Этот email уже зарегистрирован.");
+      const link = resolveLocalStudentByAccessCode(accessCode);
+      if (!link) throw new Error("Код ученика не найден.");
 
       const user = {
         uid: makeId(),
         email,
         password,
-        displayName
+        displayName,
+        role: "student",
+        teacherId: link.teacherId,
+        studentId: link.studentId
       };
 
       users.push(user);
-      localStorage.setItem(`${STORAGE_KEY}:users`, JSON.stringify(users));
-      localStorage.setItem(`${STORAGE_KEY}:${user.uid}`, JSON.stringify(createSeedData()));
-      const session = toSessionUser(user);
-      localStorage.setItem(`${STORAGE_KEY}:session`, JSON.stringify(session));
-      emitLocalAuthChange(session);
+      writeUsers(users);
+
+      const data = readLocalTeacherData(link.teacherId);
+      const student = data.students.find((item) => item.id === link.studentId);
+      student.studentAuthUid = user.uid;
+      student.studentEmail = email;
+      writeLocalTeacherData(link.teacherId, data);
+
+      emitLocalAuthChange(toSessionUser(user));
     },
     async signOut() {
-      localStorage.removeItem(`${STORAGE_KEY}:session`);
       emitLocalAuthChange(null);
     },
     async loadData(user) {
-      return readLocalData(user.uid);
+      return user.role === "teacher"
+        ? readLocalTeacherData(user.uid)
+        : filterStudentData(readLocalTeacherData(user.teacherId), user.studentId);
     },
     subscribeData(user, onData) {
-      const data = readLocalData(user.uid);
-      queueMicrotask(() => onData(data));
+      queueMicrotask(async () => onData(await this.loadData(user)));
       return () => {};
     },
     async resetDemoData(user) {
-      writeLocalData(user.uid, createSeedData());
+      ensureTeacher(user);
+      writeLocalTeacherData(user.uid, createSeedData());
     },
     async saveStudent(user, student) {
-      const data = readLocalData(user.uid);
+      ensureTeacher(user);
+      const data = readLocalTeacherData(user.uid);
       if (student.id) {
-        const target = data.students.find((item) => item.id === student.id);
-        Object.assign(target, sanitizeStudent(student));
+        Object.assign(data.students.find((item) => item.id === student.id), sanitizeStudent(student));
       } else {
-        data.students.unshift({
-          id: makeId(),
-          createdAt: new Date().toISOString(),
-          ...sanitizeStudent(student)
-        });
+        data.students.unshift({ id: makeId(), createdAt: new Date().toISOString(), ...sanitizeStudent(student) });
       }
-      writeLocalData(user.uid, data);
+      writeLocalTeacherData(user.uid, data);
     },
     async savePayment(user, payment) {
-      const data = readLocalData(user.uid);
+      ensureTeacher(user);
+      const data = readLocalTeacherData(user.uid);
       data.transactions.unshift({ id: makeId(), ...sanitizePayment(payment) });
       const student = data.students.find((item) => item.id === payment.studentId);
       student.balance += Number(payment.amount || 0);
       student.lessonsLeft += Math.floor(Number(payment.amount || 0) / Number(student.rate || 1));
-      writeLocalData(user.uid, data);
+      writeLocalTeacherData(user.uid, data);
     },
     async saveLesson(user, lesson) {
-      const data = readLocalData(user.uid);
+      ensureTeacher(user);
+      const data = readLocalTeacherData(user.uid);
       data.lessons.unshift({ id: makeId(), ...sanitizeLesson(lesson) });
       if (lesson.status === "done") {
         const student = data.students.find((item) => item.id === lesson.studentId);
         student.lessonsLeft = Math.max(0, student.lessonsLeft - 1);
         student.balance = Math.max(0, student.balance - student.rate);
       }
-      writeLocalData(user.uid, data);
+      writeLocalTeacherData(user.uid, data);
     },
     async saveHomework(user, homework) {
-      const data = readLocalData(user.uid);
+      ensureTeacher(user);
+      const data = readLocalTeacherData(user.uid);
       if (homework.id) {
-        const target = data.homeworks.find((item) => item.id === homework.id);
-        Object.assign(target, sanitizeHomework(homework));
+        Object.assign(data.homeworks.find((item) => item.id === homework.id), sanitizeHomework(homework));
       } else {
         data.homeworks.unshift({ id: makeId(), ...sanitizeHomework(homework) });
       }
-      writeLocalData(user.uid, data);
+      writeLocalTeacherData(user.uid, data);
     },
     async updateHomeworkStatus(user, homeworkId, status) {
-      const data = readLocalData(user.uid);
+      const teacherId = user.role === "teacher" ? user.uid : user.teacherId;
+      const data = readLocalTeacherData(teacherId);
       const target = data.homeworks.find((item) => item.id === homeworkId);
       target.status = status;
       if (status === "reviewed") target.progress = 100;
-      writeLocalData(user.uid, data);
+      writeLocalTeacherData(teacherId, data);
     },
     async deleteStudent(user, studentId) {
-      const data = readLocalData(user.uid);
+      ensureTeacher(user);
+      const data = readLocalTeacherData(user.uid);
+      const student = data.students.find((item) => item.id === studentId);
       data.students = data.students.filter((item) => item.id !== studentId);
       data.transactions = data.transactions.filter((item) => item.studentId !== studentId);
       data.lessons = data.lessons.filter((item) => item.studentId !== studentId);
       data.homeworks = data.homeworks.filter((item) => item.studentId !== studentId);
-      writeLocalData(user.uid, data);
+      writeLocalTeacherData(user.uid, data);
+
+      if (student?.studentAuthUid) {
+        const users = readUsers().filter((item) => item.uid !== student.studentAuthUid);
+        writeUsers(users);
+      }
     }
   };
+}
+
+async function loadFirebaseSession(authUser) {
+  const userDoc = await getDoc(doc(firebaseDb, "users", authUser.uid));
+  const profile = userDoc.exists() ? userDoc.data() : {};
+  return {
+    uid: authUser.uid,
+    email: authUser.email || profile.email || "",
+    displayName: profile.displayName || authUser.displayName || "",
+    role: profile.role || "teacher",
+    teacherId: profile.teacherId || authUser.uid,
+    studentId: profile.studentId || null
+  };
+}
+
+async function resolveFirebaseStudentByAccessCode(accessCode) {
+  const snapshot = await getDocs(query(collectionGroup(firebaseDb, "students"), where("accessCode", "==", accessCode)));
+  const match = snapshot.docs[0];
+  if (!match) return null;
+  return {
+    teacherId: match.ref.parent.parent.id,
+    studentId: match.id,
+    student: match.data()
+  };
+}
+
+async function loadTeacherData(teacherId) {
+  const sections = ["students", "transactions", "lessons", "homeworks"];
+  const result = emptyData();
+  await Promise.all(
+    sections.map(async (section) => {
+      const snapshot = await getDocs(collection(firebaseDb, "users", teacherId, section));
+      result[section] = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+    })
+  );
+  return result;
+}
+
+async function loadStudentData(teacherId, studentId) {
+  const teacher = await loadTeacherData(teacherId);
+  return filterStudentData(teacher, studentId);
+}
+
+function subscribeTeacherData(teacherId, onData, onError) {
+  const targets = ["students", "transactions", "lessons", "homeworks"];
+  const store = emptyData();
+
+  const unsubscribers = targets.map((key) =>
+    onSnapshot(
+      collection(firebaseDb, "users", teacherId, key),
+      (snapshot) => {
+        store[key] = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+        onData({ ...store, students: [...store.students], transactions: [...store.transactions], lessons: [...store.lessons], homeworks: [...store.homeworks] });
+      },
+      onError
+    )
+  );
+
+  return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+}
+
+function subscribeStudentData(teacherId, studentId, onData, onError) {
+  return subscribeTeacherData(
+    teacherId,
+    (data) => onData(filterStudentData(data, studentId)),
+    onError
+  );
+}
+
+function filterStudentData(data, studentId) {
+  return {
+    students: data.students.filter((item) => item.id === studentId),
+    transactions: data.transactions.filter((item) => item.studentId === studentId),
+    lessons: data.lessons.filter((item) => item.studentId === studentId),
+    homeworks: data.homeworks.filter((item) => item.studentId === studentId)
+  };
+}
+
+async function replaceTeacherData(uid, data) {
+  const sections = ["students", "transactions", "lessons", "homeworks"];
+  const batch = writeBatch(firebaseDb);
+  for (const section of sections) {
+    const snapshot = await getDocs(collection(firebaseDb, "users", uid, section));
+    snapshot.forEach((item) => batch.delete(item.ref));
+  }
+  await batch.commit();
+  for (const section of sections) {
+    for (const item of data[section]) {
+      await setDoc(doc(collection(firebaseDb, "users", uid, section), item.id), item);
+    }
+  }
+}
+
+async function loadDocData(ref) {
+  return (await getDoc(ref)).data();
 }
 
 function sanitizeStudent(student) {
@@ -313,8 +429,11 @@ function sanitizeStudent(student) {
     goal: String(student.goal || "").trim(),
     notes: String(student.notes || "").trim(),
     portalCode: student.portalCode || makePortalCode(student.name),
+    accessCode: student.accessCode || makeAccessCode(student.name),
     balance: Number(student.balance || 0),
-    lessonsLeft: Number(student.lessonsLeft || 0)
+    lessonsLeft: Number(student.lessonsLeft || 0),
+    studentAuthUid: student.studentAuthUid || null,
+    studentEmail: student.studentEmail || ""
   };
 }
 
@@ -346,65 +465,23 @@ function sanitizeHomework(homework) {
     status: homework.status,
     progress: clampProgress(homework.progress),
     description: String(homework.description || "").trim(),
-    teacherNote: String(homework.teacherNote || "").trim()
+    teacherNote: String(homework.teacherNote || "").trim(),
+    imageUrl: String(homework.imageUrl || "").trim()
   };
 }
 
-async function replaceUserData(uid, data) {
-  const sections = ["students", "transactions", "lessons", "homeworks"];
-  const batch = writeBatch(firebaseDb);
-
-  for (const section of sections) {
-    const collectionRef = collection(firebaseDb, "users", uid, section);
-    const snapshot = await getDocs(collectionRef);
-    snapshot.forEach((item) => batch.delete(item.ref));
-  }
-
-  await batch.commit();
-
-  for (const section of sections) {
-    for (const item of data[section]) {
-      await setDoc(doc(collection(firebaseDb, "users", uid, section), item.id), item);
-    }
+function readLocalSession() {
+  try {
+    return JSON.parse(localStorage.getItem(`${STORAGE_KEY}:session`) || "null");
+  } catch {
+    return null;
   }
 }
 
-async function loadFirestoreData(uid) {
-  const sections = ["students", "transactions", "lessons", "homeworks"];
-  const result = {
-    students: [],
-    transactions: [],
-    lessons: [],
-    homeworks: []
-  };
-
-  await Promise.all(
-    sections.map(async (section) => {
-      const snapshot = await getDocs(collection(firebaseDb, "users", uid, section));
-      result[section] = snapshot.docs.map((item) => ({
-        id: item.id,
-        ...item.data()
-      }));
-    })
-  );
-
-  return result;
-}
-
-async function loadStudent(studentRef) {
-  const snapshot = await getDoc(studentRef);
-  return snapshot.data();
-}
-
-function isFirebaseConfigured(config) {
-  return Boolean(
-    config &&
-      config.enabled &&
-      config.apiKey &&
-      !config.apiKey.startsWith("PASTE_") &&
-      config.projectId &&
-      !config.projectId.startsWith("PASTE_")
-  );
+function emitLocalAuthChange(user) {
+  if (user) localStorage.setItem(`${STORAGE_KEY}:session`, JSON.stringify(user));
+  else localStorage.removeItem(`${STORAGE_KEY}:session`);
+  localAuthListeners.forEach((listener) => listener(user));
 }
 
 function readUsers() {
@@ -415,29 +492,58 @@ function readUsers() {
   }
 }
 
-function toSessionUser(user) {
-  return {
-    uid: user.uid,
-    email: user.email,
-    displayName: user.displayName || ""
-  };
+function writeUsers(users) {
+  localStorage.setItem(`${STORAGE_KEY}:users`, JSON.stringify(users));
 }
 
-function readLocalData(uid) {
+function readLocalTeacherData(uid) {
   try {
-    const raw = localStorage.getItem(`${STORAGE_KEY}:${uid}`);
+    const raw = localStorage.getItem(`${STORAGE_KEY}:teacher:${uid}`);
     return raw ? JSON.parse(raw) : createSeedData();
   } catch {
     return createSeedData();
   }
 }
 
-function writeLocalData(uid, data) {
-  localStorage.setItem(`${STORAGE_KEY}:${uid}`, JSON.stringify(data));
+function writeLocalTeacherData(uid, data) {
+  localStorage.setItem(`${STORAGE_KEY}:teacher:${uid}`, JSON.stringify(data));
 }
 
-function emitLocalAuthChange(user) {
-  localAuthListeners.forEach((listener) => listener(user));
+function resolveLocalStudentByAccessCode(accessCode) {
+  const users = readUsers().filter((item) => item.role === "teacher");
+  for (const teacher of users) {
+    const data = readLocalTeacherData(teacher.uid);
+    const student = data.students.find((item) => item.accessCode === accessCode);
+    if (student) {
+      return {
+        teacherId: teacher.uid,
+        studentId: student.id,
+        student
+      };
+    }
+  }
+  return null;
+}
+
+function toSessionUser(user) {
+  return {
+    uid: user.uid,
+    email: user.email,
+    displayName: user.displayName || "",
+    role: user.role || "teacher",
+    teacherId: user.teacherId || user.uid,
+    studentId: user.studentId || null
+  };
+}
+
+function ensureTeacher(user) {
+  if (user.role !== "teacher") {
+    throw new Error("Эта операция доступна только преподавателю.");
+  }
+}
+
+function emptyData() {
+  return { students: [], transactions: [], lessons: [], homeworks: [] };
 }
 
 function createSeedData() {
@@ -447,6 +553,7 @@ function createSeedData() {
       {
         id: "student-1",
         portalCode: "ANNA-241",
+        accessCode: "STU-241",
         name: "Анна Соколова",
         subject: "Математика",
         rate: 1800,
@@ -455,11 +562,14 @@ function createSeedData() {
         phone: "+7 999 123-45-67",
         goal: "Подготовка к ЕГЭ на 85+",
         notes: "Сильная мотивация. Лучше заходят короткие задания и разбор ошибок в начале урока.",
-        createdAt: today.toISOString()
+        createdAt: today.toISOString(),
+        studentAuthUid: null,
+        studentEmail: ""
       },
       {
         id: "student-2",
         portalCode: "ILYA-815",
+        accessCode: "STU-815",
         name: "Илья Миронов",
         subject: "Английский",
         rate: 1500,
@@ -468,32 +578,17 @@ function createSeedData() {
         phone: "+7 999 222-11-22",
         goal: "Разговорная практика для собеседований",
         notes: "Фокус на speaking, ответы без длинных пауз и уверенная самопрезентация.",
-        createdAt: today.toISOString()
-      },
-      {
-        id: "student-3",
-        portalCode: "MARIA-502",
-        name: "Мария Ким",
-        subject: "Физика",
-        rate: 2000,
-        balance: 8000,
-        lessonsLeft: 4,
-        phone: "",
-        goal: "Олимпиадные задачи",
-        notes: "Нужна повышенная сложность и меньше типовых задач.",
-        createdAt: today.toISOString()
+        createdAt: today.toISOString(),
+        studentAuthUid: null,
+        studentEmail: ""
       }
     ],
     transactions: [
-      { id: "tr-1", studentId: "student-1", amount: 5400, date: todayISO(), comment: "Пакет из трех занятий" },
-      { id: "tr-2", studentId: "student-2", amount: 3000, date: todayISO(), comment: "Аванс за две недели" },
-      { id: "tr-3", studentId: "student-3", amount: 8000, date: todayISO(), comment: "Оплата за месяц" }
+      { id: "tr-1", studentId: "student-1", amount: 5400, date: todayISO(), comment: "Пакет из трех занятий" }
     ],
     lessons: [
-      { id: "ls-1", studentId: "student-1", ...plusDays(0, "17:00"), duration: 60, status: "planned", topic: "Параметры и графики" },
-      { id: "ls-2", studentId: "student-2", ...plusDays(1, "19:00"), duration: 60, status: "planned", topic: "HR interview" },
-      { id: "ls-3", studentId: "student-3", ...plusDays(2, "16:30"), duration: 90, status: "planned", topic: "Электродинамика" },
-      { id: "ls-4", studentId: "student-1", ...plusDays(-2, "17:00"), duration: 60, status: "done", topic: "Производные" }
+      { id: "ls-1", studentId: "student-1", ...plusDays(1, "17:00"), duration: 60, status: "planned", topic: "Параметры и графики" },
+      { id: "ls-2", studentId: "student-2", ...plusDays(2, "19:00"), duration: 60, status: "planned", topic: "HR interview" }
     ],
     homeworks: [
       {
@@ -504,27 +599,8 @@ function createSeedData() {
         status: "submitted",
         progress: 90,
         description: "Решить три задачи с полным оформлением и коротким объяснением метода.",
-        teacherNote: "Проверь аккуратность в последнем номере и распиши переходы."
-      },
-      {
-        id: "hw-2",
-        studentId: "student-2",
-        title: "Self-introduction for interviews",
-        dueDate: plusDays(2, "00:00").date,
-        status: "rework",
-        progress: 65,
-        description: "Подготовить устную самопрезентацию на 90 секунд и записать ключевые фразы.",
-        teacherNote: "Добавь примеры достижений и убери повторяющиеся конструкции."
-      },
-      {
-        id: "hw-3",
-        studentId: "student-3",
-        title: "Разбор задачи по электрическому полю",
-        dueDate: plusDays(4, "00:00").date,
-        status: "reviewed",
-        progress: 100,
-        description: "Решение с альтернативным способом и проверкой размерности.",
-        teacherNote: "Очень хороший ход решения, особенно в части проверки результата."
+        teacherNote: "Проверь аккуратность в последнем номере и распиши переходы.",
+        imageUrl: ""
       }
     ]
   };
@@ -535,10 +611,7 @@ function plusDays(days, time) {
   base.setDate(base.getDate() + days);
   const [hours, minutes] = time.split(":");
   base.setHours(Number(hours), Number(minutes), 0, 0);
-  return {
-    date: toISODate(base),
-    time
-  };
+  return { date: toISODate(base), time };
 }
 
 function todayISO() {
@@ -565,13 +638,24 @@ function makeId() {
 }
 
 function makePortalCode(name) {
-  const source = String(name || "STU")
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
+  const source = String(name || "STU").split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const suffix = Math.floor(100 + Math.random() * 900);
   return `${source || "STU"}-${suffix}`;
+}
+
+function makeAccessCode(name) {
+  const source = String(name || "STU").replaceAll(/\s+/g, "").slice(0, 3).toUpperCase();
+  const suffix = Math.floor(100 + Math.random() * 900);
+  return `${source || "STU"}-${suffix}`;
+}
+
+function isFirebaseConfigured(config) {
+  return Boolean(
+    config &&
+      config.enabled &&
+      config.apiKey &&
+      !config.apiKey.startsWith("PASTE_") &&
+      config.projectId &&
+      !config.projectId.startsWith("PASTE_")
+  );
 }

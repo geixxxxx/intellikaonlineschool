@@ -104,7 +104,8 @@ button {
 .auth-alert,
 .panel--notice,
 .panel--danger,
-.panel--center {
+.panel--center,
+.panel--student {
   border-radius: 24px;
   padding: 18px;
 }
@@ -120,6 +121,11 @@ button {
   background: rgba(196, 69, 54, 0.08);
   border: 1px solid rgba(196, 69, 54, 0.12);
   color: var(--danger);
+}
+
+.panel--student {
+  background: rgba(255, 248, 239, 0.74);
+  border: 1px solid rgba(76, 52, 35, 0.08);
 }
 
 .panel--center {
@@ -699,6 +705,16 @@ label select:focus {
 .homework-card h4,
 .portal-card h3 {
   margin: 0;
+}
+
+.task-image-preview,
+.task-image {
+  width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  border-radius: 18px;
+  border: 1px solid rgba(76, 52, 35, 0.08);
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .homework-meta,
