@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Intellika Tutor Platform</title>
+    <meta
+      name="description"
+      content="Intellika is a tutor platform with student management, homework review, lesson tracking and student portals."
+    />
+    <meta name="theme-color" content="#ef7d57" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@500;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-mark">IN</div>
+        <nav class="sidebar-nav">
+          <button class="nav-btn is-active" data-view="dashboard">Дашборд</button>
+          <button class="nav-btn" data-view="students">Ученики</button>
+          <button class="nav-btn" data-view="homework">Проверка ДЗ</button>
+          <button class="nav-btn" data-view="portals">Кабинеты</button>
+          <button class="nav-btn" data-view="calendar">Календарь</button>
+        </nav>
+        <button class="ghost-btn sidebar-reset" id="resetDataBtn">Сбросить демо</button>
+      </aside>
+
+      <div class="main-panel">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Платформа репетитора</p>
+            <h1>Intellika</h1>
+          </div>
+          <div class="topbar-actions">
+            <label class="search-field">
+              <span>Поиск</span>
+              <input id="searchInput" type="search" placeholder="Имя, предмет, заметка" />
+            </label>
+            <button class="primary-btn" id="addStudentBtn">Добавить ученика</button>
+          </div>
+        </header>
+
+        <main id="appView" class="content"></main>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="modalBackdrop">
+      <div class="modal" id="modalRoot"></div>
+    </div>
+
+    <template id="studentFormTemplate">
+      <form class="modal-form" id="studentForm">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Профиль ученика</p>
+            <h2 id="studentModalTitle">Новый ученик</h2>
+          </div>
+          <button type="button" class="icon-btn" data-close-modal>×</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            <span>Имя и фамилия</span>
+            <input name="name" required />
+          </label>
+          <label>
+            <span>Предмет</span>
+            <input name="subject" required />
+          </label>
+          <label>
+            <span>Ставка за урок</span>
+            <input name="rate" type="number" min="1" required />
+          </label>
+          <label>
+            <span>Телефон</span>
+            <input name="phone" />
+          </label>
+          <label class="full-width">
+            <span>Цель обучения</span>
+            <input name="goal" />
+          </label>
+          <label class="full-width">
+            <span>Заметки</span>
+            <textarea name="notes" rows="4"></textarea>
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn" data-close-modal>Отмена</button>
+          <button type="submit" class="primary-btn">Сохранить</button>
+        </div>
+      </form>
+    </template>
+
+    <template id="paymentTemplate">
+      <form class="modal-form" id="paymentForm">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Оплата</p>
+            <h2 id="paymentModalTitle">Новая транзакция</h2>
+          </div>
+          <button type="button" class="icon-btn" data-close-modal>×</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            <span>Сумма</span>
+            <input name="amount" type="number" min="1" required />
+          </label>
+          <label>
+            <span>Дата</span>
+            <input name="date" type="date" required />
+          </label>
+          <label class="full-width">
+            <span>Комментарий</span>
+            <input name="comment" />
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn" data-close-modal>Отмена</button>
+          <button type="submit" class="primary-btn">Зачислить</button>
+        </div>
+      </form>
+    </template>
+
+    <template id="lessonTemplate">
+      <form class="modal-form" id="lessonForm">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Занятие</p>
+            <h2 id="lessonModalTitle">Добавить урок</h2>
+          </div>
+          <button type="button" class="icon-btn" data-close-modal>×</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            <span>Дата</span>
+            <input name="date" type="date" required />
+          </label>
+          <label>
+            <span>Время</span>
+            <input name="time" type="time" required />
+          </label>
+          <label>
+            <span>Длительность, мин</span>
+            <input name="duration" type="number" min="30" step="15" required />
+          </label>
+          <label>
+            <span>Статус</span>
+            <select name="status">
+              <option value="planned">Запланирован</option>
+              <option value="done">Проведен</option>
+              <option value="cancelled">Отменен</option>
+            </select>
+          </label>
+          <label class="full-width">
+            <span>Комментарий</span>
+            <input name="topic" />
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn" data-close-modal>Отмена</button>
+          <button type="submit" class="primary-btn">Сохранить</button>
+        </div>
+      </form>
+    </template>
+
+    <template id="homeworkTemplate">
+      <form class="modal-form" id="homeworkForm">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Домашнее задание</p>
+            <h2 id="homeworkModalTitle">Новое ДЗ</h2>
+          </div>
+          <button type="button" class="icon-btn" data-close-modal>×</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            <span>Название</span>
+            <input name="title" required />
+          </label>
+          <label>
+            <span>Срок сдачи</span>
+            <input name="dueDate" type="date" required />
+          </label>
+          <label>
+            <span>Статус</span>
+            <select name="status">
+              <option value="assigned">Назначено</option>
+              <option value="submitted">Сдано</option>
+              <option value="reviewed">Проверено</option>
+              <option value="rework">На доработке</option>
+            </select>
+          </label>
+          <label>
+            <span>Оценка прогресса, %</span>
+            <input name="progress" type="number" min="0" max="100" value="0" />
+          </label>
+          <label class="full-width">
+            <span>Описание</span>
+            <textarea name="description" rows="4"></textarea>
+          </label>
+          <label class="full-width">
+            <span>Комментарий преподавателя</span>
+            <textarea name="teacherNote" rows="3"></textarea>
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn" data-close-modal>Отмена</button>
+          <button type="submit" class="primary-btn">Сохранить</button>
+        </div>
+      </form>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
