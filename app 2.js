@@ -1,30 +1,19 @@
-import { backend } from "./firebase.js";
+const STORAGE_KEY = "intellika-demo-v2";
 
 const state = {
-  authReady: false,
-  user: null,
-  data: emptyData(),
-  loadingData: false,
   currentView: "dashboard",
   selectedStudentId: null,
   search: "",
   homeworkFilter: "all",
-  authMode: "login",
-  notice: "",
-  unsubscribeData: null
+  data: loadData(),
 };
 
-const authMount = document.getElementById("authMount");
-const appShell = document.getElementById("appShell");
 const appView = document.getElementById("appView");
 const modalBackdrop = document.getElementById("modalBackdrop");
 const modalRoot = document.getElementById("modalRoot");
 const searchInput = document.getElementById("searchInput");
 const addStudentBtn = document.getElementById("addStudentBtn");
 const resetDataBtn = document.getElementById("resetDataBtn");
-const logoutBtn = document.getElementById("logoutBtn");
-const userEmail = document.getElementById("userEmail");
-const backendStatus = document.getElementById("backendStatus");
 
 init();
 
@@ -32,7 +21,7 @@ function init() {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       state.currentView = button.dataset.view;
-      if (!["profile", "cabinet"].includes(state.currentView)) {
+      if (!["profile", "cabinet"].includes(button.dataset.view)) {
         state.selectedStudentId = null;
       }
       render();
@@ -45,8 +34,13 @@ function init() {
   });
 
   addStudentBtn.addEventListener("click", () => openStudentModal());
-  resetDataBtn.addEventListener("click", resetDataset);
-  logoutBtn.addEventListener("click", handleSignOut);
+
+  resetDataBtn.addEventListener("click", () => {
+    if (!window.confirm("Сбросить все демо-данные?")) return;
+    state.data = createSeedData();
+    persist();
+    render();
+  });
 
   modalBackdrop.addEventListener("click", (event) => {
     if (event.target === modalBackdrop || event.target.hasAttribute("data-close-modal")) {
@@ -58,78 +52,11 @@ function init() {
     if (event.key === "Escape") closeModal();
   });
 
-  backend.onAuthChange(async (user) => {
-    state.user = user;
-    state.authReady = true;
-    state.notice = "";
-
-    if (state.unsubscribeData) {
-      state.unsubscribeData();
-      state.unsubscribeData = null;
-    }
-
-    if (user) {
-      await bootUserSession();
-    } else {
-      state.data = emptyData();
-      state.selectedStudentId = null;
-      state.currentView = "dashboard";
-      state.loadingData = false;
-      render();
-    }
-  });
-
-  render();
-}
-
-async function bootUserSession() {
-  state.loadingData = true;
-  render();
-
-  try {
-    state.data = normalizeData(await backend.loadData(state.user));
-  } catch (error) {
-    state.notice = getErrorMessage(error);
-  }
-
-  state.unsubscribeData = backend.subscribeData(
-    state.user,
-    (data) => {
-      state.data = normalizeData(data);
-      state.loadingData = false;
-      render();
-    },
-    (error) => {
-      state.notice = getErrorMessage(error);
-      state.loadingData = false;
-      render();
-    }
-  );
-
-  state.loadingData = false;
   render();
 }
 
 function render() {
-  syncChrome();
-
-  if (!state.authReady) {
-    renderSplash();
-    return;
-  }
-
-  if (!state.user) {
-    renderAuthScreen();
-    return;
-  }
-
-  authMount.classList.add("hidden");
-  appShell.classList.remove("hidden");
-
-  if (state.loadingData) {
-    appView.innerHTML = renderLoadingPanel("Подключаем аккаунт и загружаем базу данных...");
-    return;
-  }
+  syncNav();
 
   if (state.currentView === "students") {
     appView.innerHTML = renderStudentsView();
@@ -157,6 +84,7 @@ function render() {
 
   if (state.currentView === "calendar") {
     appView.innerHTML = renderCalendarView();
+    bindCalendarView();
     return;
   }
 
@@ -171,186 +99,35 @@ function render() {
   bindDashboardView();
 }
 
-function syncChrome() {
-  appShell.classList.toggle("hidden", !state.authReady || !state.user);
-  authMount.classList.toggle("hidden", !state.authReady || !!state.user);
-  backendStatus.textContent = backend.mode === "firebase" ? "Firebase Cloud" : "Демо без Firebase";
-  backendStatus.classList.toggle("is-live", backend.mode === "firebase");
-  userEmail.textContent = state.user?.email || "guest@demo.local";
-  resetDataBtn.textContent = backend.mode === "firebase" ? "Загрузить демо" : "Сбросить демо";
+function syncNav() {
   document.querySelectorAll(".nav-btn").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === state.currentView);
   });
 }
 
-function renderSplash() {
-  authMount.classList.remove("hidden");
-  appShell.classList.add("hidden");
-  authMount.innerHTML = `
-    <section class="auth-card auth-card--center">
-      <div class="brand-mark">IN</div>
-      <p class="eyebrow">Intellika</p>
-      <h2 class="hero-title">Поднимаем платформу...</h2>
-    </section>
-  `;
-}
-
-function renderAuthScreen() {
-  authMount.innerHTML = `
-    <section class="auth-card">
-      <div class="auth-intro">
-        <div class="brand-mark">IN</div>
-        <p class="eyebrow">Платформа репетитора</p>
-        <h2 class="hero-title">Регистрация, вход и общая база учеников уже встроены.</h2>
-        <p class="hero-copy">
-          ${backend.mode === "firebase"
-            ? "Аккаунты работают через Firebase Authentication, а данные проекта живут в Cloud Firestore."
-            : "Сейчас включен демо-режим. Чтобы включить настоящую облачную базу и регистрацию, заполни файл firebase-config.js и включи Firebase Auth + Firestore."}
-        </p>
-        <div class="auth-note">
-          <strong>${backend.mode === "firebase" ? "Cloud mode" : "Что нужно для продакшена"}</strong>
-          <p>${backend.mode === "firebase"
-            ? "Можно регистрировать преподавателей по email и паролю. У каждого аккаунта будет своя изолированная база учеников."
-            : "Создай Firebase-проект, включи Email/Password в Authentication и Cloud Firestore, затем вставь конфиг из консоли в firebase-config.js."}</p>
-        </div>
-      </div>
-
-      <div class="auth-panel">
-        <div class="pill-tabs">
-          <button class="tag-btn ${state.authMode === "login" ? "is-selected" : ""}" data-auth-mode="login">Вход</button>
-          <button class="tag-btn ${state.authMode === "register" ? "is-selected" : ""}" data-auth-mode="register">Регистрация</button>
-        </div>
-
-        <form id="authForm" class="modal-form auth-form">
-          ${
-            state.authMode === "register"
-              ? `
-                <label>
-                  <span>Имя преподавателя</span>
-                  <input name="displayName" required />
-                </label>
-              `
-              : ""
-          }
-          <label>
-            <span>Email</span>
-            <input name="email" type="email" required />
-          </label>
-          <label>
-            <span>Пароль</span>
-            <input name="password" type="password" minlength="6" required />
-          </label>
-          ${
-            state.authMode === "register"
-              ? `
-                <label>
-                  <span>Повторите пароль</span>
-                  <input name="passwordRepeat" type="password" minlength="6" required />
-                </label>
-              `
-              : ""
-          }
-          ${state.notice ? `<div class="auth-alert">${escapeHtml(state.notice)}</div>` : ""}
-          <button type="submit" class="primary-btn auth-submit">
-            ${state.authMode === "login" ? "Войти в кабинет" : "Создать аккаунт"}
-          </button>
-        </form>
-      </div>
-    </section>
-  `;
-
-  authMount.classList.remove("hidden");
-  appShell.classList.add("hidden");
-
-  authMount.querySelectorAll("[data-auth-mode]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.authMode = button.dataset.authMode;
-      state.notice = "";
-      render();
-    });
-  });
-
-  document.getElementById("authForm")?.addEventListener("submit", handleAuthSubmit);
-}
-
-async function handleAuthSubmit(event) {
-  event.preventDefault();
-  const formData = new FormData(event.currentTarget);
-  const email = String(formData.get("email")).trim();
-  const password = String(formData.get("password"));
-  const displayName = String(formData.get("displayName") || "").trim();
-  const passwordRepeat = String(formData.get("passwordRepeat") || "");
-
-  if (state.authMode === "register" && password !== passwordRepeat) {
-    state.notice = "Пароли не совпадают.";
-    render();
-    return;
-  }
-
-  try {
-    state.notice = "";
-    if (state.authMode === "login") {
-      await backend.signIn(email, password);
-    } else {
-      await backend.signUp({ email, password, displayName });
-    }
-  } catch (error) {
-    state.notice = getErrorMessage(error);
-    render();
-  }
-}
-
-async function handleSignOut() {
-  try {
-    await backend.signOut();
-  } catch (error) {
-    state.notice = getErrorMessage(error);
-    render();
-  }
-}
-
-async function resetDataset() {
-  if (!state.user) return;
-  const confirmMessage =
-    backend.mode === "firebase"
-      ? "Загрузить в облачную базу стартовый набор demo-данных?"
-      : "Сбросить локальные demo-данные?";
-  if (!window.confirm(confirmMessage)) return;
-
-  try {
-    await backend.resetDemoData(state.user);
-    state.data = normalizeData(await backend.loadData(state.user));
-    render();
-  } catch (error) {
-    state.notice = getErrorMessage(error);
-    render();
-  }
-}
-
 function renderDashboardView() {
   const data = deriveData();
   const upcoming = data.upcomingLessons.slice(0, 4);
-  const reviewQueue = data.homeworks.filter((item) => ["submitted", "rework"].includes(item.status)).slice(0, 4);
+  const needReview = data.homeworks.filter((item) => ["submitted", "rework"].includes(item.status)).slice(0, 4);
 
   return `
-    ${renderNoticeBanner()}
-    ${backend.mode === "demo" ? renderSetupBanner() : ""}
     <section class="hero-card">
       <div>
         <p class="eyebrow">Рабочая панель</p>
-        <h2 class="hero-title">У тебя уже есть аккаунты, база данных и изолированные кабинеты под каждого преподавателя.</h2>
+        <h2 class="hero-title">Теперь здесь есть и проверка ДЗ, и личные кабинеты учеников.</h2>
         <p class="hero-copy">
-          Платформа хранит учеников, оплаты, занятия и домашние задания в общей базе, а вход и регистрация работают через ${backend.mode === "firebase" ? "Firebase Authentication" : "демо-слой до заполнения Firebase-конфига"}.
+          Платформа ведет учеников, оплаты, уроки и домашние задания, а кабинет ученика показывает его прогресс,
+          ближайшие занятия и обратную связь преподавателя.
         </p>
         <div class="inline-actions">
           <button class="primary-btn" id="heroAddStudent">Новый ученик</button>
-          <button class="ghost-btn" id="heroOpenHomework">Проверка ДЗ</button>
-          <button class="ghost-btn" id="heroOpenPortals">Кабинеты</button>
+          <button class="ghost-btn" id="heroOpenHomework">Проверить ДЗ</button>
+          <button class="ghost-btn" id="heroOpenPortals">Открыть кабинеты</button>
         </div>
       </div>
       <div class="hero-stats">
         <div class="hero-stat">
-          <span class="eyebrow">Выручка</span>
+          <span class="eyebrow">Выручка за все время</span>
           <strong>${formatMoney(data.totalRevenue)}</strong>
         </div>
         <div class="hero-stat">
@@ -358,17 +135,17 @@ function renderDashboardView() {
           <strong>${data.homeworks.filter((item) => item.status === "submitted").length}</strong>
         </div>
         <div class="hero-stat">
-          <span class="eyebrow">Аккаунт</span>
-          <strong>${escapeHtml(state.user.email)}</strong>
+          <span class="eyebrow">Кабинеты</span>
+          <strong>${data.students.length}</strong>
         </div>
       </div>
     </section>
 
     <section class="metrics-grid">
-      ${metricCard("Ученики", data.students.length, `${data.activeStudents} активных`)}
+      ${metricCard("Ученики", data.students.length, `${data.activeStudents} активных сейчас`)}
       ${metricCard("Домашки", data.homeworks.length, `${data.reviewedHomeworkCount} уже проверено`)}
-      ${metricCard("Остаток уроков", data.totalLessonsLeft, "По всем ученикам")}
-      ${metricCard("На неделе", data.weekLessons, "Запланировано")}
+      ${metricCard("Уроков вперед", data.totalLessonsLeft, "Оплаченный остаток по всем ученикам")}
+      ${metricCard("На неделе", data.weekLessons, "Запланированных занятий")}
     </section>
 
     <section class="profile-grid">
@@ -376,14 +153,30 @@ function renderDashboardView() {
         <div class="section-head">
           <div>
             <h3 class="section-title">Ближайшие занятия</h3>
-            <p class="section-subtitle">То, что скоро начнется</p>
+            <p class="section-subtitle">Что открывается на горизонте недели</p>
           </div>
         </div>
         <div class="list">
           ${
             upcoming.length
-              ? upcoming.map(renderUpcomingLessonCard).join("")
-              : '<div class="empty-state">Пока нет ближайших занятий.</div>'
+              ? upcoming
+                  .map((lesson) => {
+                    const student = findStudent(lesson.studentId);
+                    return `
+                      <article class="timeline-item">
+                        <div>
+                          <strong>${student?.name || "Без имени"}</strong>
+                          <div class="timeline-meta">${lesson.topic || student?.subject || "Урок"}</div>
+                        </div>
+                        <div>
+                          <strong>${formatLessonDate(lesson.date, lesson.time)}</strong>
+                          <div class="timeline-meta">${lesson.duration} мин</div>
+                        </div>
+                      </article>
+                    `;
+                  })
+                  .join("")
+              : '<div class="empty-state">Ближайших уроков пока нет.</div>'
           }
         </div>
       </div>
@@ -392,14 +185,30 @@ function renderDashboardView() {
         <div class="section-head">
           <div>
             <h3 class="section-title">Очередь на проверку</h3>
-            <p class="section-subtitle">Работы, которые требуют внимания</p>
+            <p class="section-subtitle">То, что ученики сдали и ждут комментария</p>
           </div>
         </div>
         <div class="list">
           ${
-            reviewQueue.length
-              ? reviewQueue.map(renderReviewCard).join("")
-              : '<div class="empty-state">Сейчас очередь пуста.</div>'
+            needReview.length
+              ? needReview
+                  .map((homework) => {
+                    const student = findStudent(homework.studentId);
+                    return `
+                      <article class="timeline-item">
+                        <div>
+                          <strong>${homework.title}</strong>
+                          <div class="timeline-meta">${student?.name || "Ученик"} • ${student?.subject || ""}</div>
+                        </div>
+                        <div>
+                          <strong>${homeworkStatusLabel(homework.status)}</strong>
+                          <div class="timeline-meta">до ${formatDate(homework.dueDate)}</div>
+                        </div>
+                      </article>
+                    `;
+                  })
+                  .join("")
+              : '<div class="empty-state">Очередь пустая. Все домашки уже обработаны.</div>'
           }
         </div>
       </div>
@@ -411,13 +220,12 @@ function renderStudentsView() {
   const students = filteredStudents();
 
   return `
-    ${renderNoticeBanner()}
     <section class="panel">
       <div class="students-toolbar">
         <div>
           <p class="eyebrow">База учеников</p>
           <h2 class="section-title">Ученики</h2>
-          <p class="section-subtitle">Теперь это уже общая база аккаунта, а не локальный список в браузере</p>
+          <p class="section-subtitle">Карточки с балансом, уроками, ДЗ и быстрым входом в кабинет ученика</p>
         </div>
         <div class="pill-tabs">
           <button class="tag-btn" id="openDashboardBtn">На дашборд</button>
@@ -440,8 +248,8 @@ function renderStudentsView() {
                         </div>
                       </div>
                       <div>
-                        <h3 class="student-name">${escapeHtml(student.name)}</h3>
-                        <p class="student-subject">${escapeHtml(student.subject)}</p>
+                        <h3 class="student-name">${student.name}</h3>
+                        <p class="student-subject">${student.subject}</p>
                       </div>
                       <div class="stat-row">
                         <span class="badge ${student.lessonsLeft <= 1 ? "is-danger" : "is-success"}">${student.lessonsLeft} уроков</span>
@@ -450,7 +258,7 @@ function renderStudentsView() {
                       </div>
                       <div class="info-list">
                         <div class="info-line"><span>Ставка</span><strong>${formatMoney(student.rate)}</strong></div>
-                        <div class="info-line"><span>Телефон</span><strong>${escapeHtml(student.phone || "Не указан")}</strong></div>
+                        <div class="info-line"><span>Телефон</span><strong>${student.phone || "Не указан"}</strong></div>
                       </div>
                       <div class="student-actions">
                         <button class="ghost-btn" data-open-payment="${student.id}">Оплата</button>
@@ -477,17 +285,16 @@ function renderHomeworkView() {
   const columns = [
     { key: "submitted", title: "На проверке" },
     { key: "rework", title: "На доработке" },
-    { key: "reviewed", title: "Проверено" }
+    { key: "reviewed", title: "Проверено" },
   ];
 
   return `
-    ${renderNoticeBanner()}
     <section class="panel">
       <div class="students-toolbar">
         <div>
           <p class="eyebrow">Домашние задания</p>
           <h2 class="section-title">Проверка ДЗ</h2>
-          <p class="section-subtitle">Все задания живут в базе и доступны после входа в аккаунт</p>
+          <p class="section-subtitle">Смотрите, кто сдал работу, что вернуть на доработку и что уже принято</p>
         </div>
         <div class="pill-tabs">
           <button class="tag-btn" id="homeworkOnlySubmitted">${
@@ -514,15 +321,15 @@ function renderHomeworkView() {
                           return `
                             <article class="homework-card">
                               <div>
-                                <h4>${escapeHtml(item.title)}</h4>
-                                <div class="homework-meta">${escapeHtml(student?.name || "Ученик")} • ${escapeHtml(student?.subject || "")}</div>
+                                <h4>${item.title}</h4>
+                                <div class="homework-meta">${student?.name || "Ученик"} • ${student?.subject || ""}</div>
                               </div>
-                              <div class="muted-copy">${escapeHtml(item.description || "Без описания")}</div>
+                              <div class="muted-copy">${item.description || "Без описания"}</div>
                               <div class="progress-track">
                                 <div class="progress-fill" style="width: ${clampProgress(item.progress)}%"></div>
                               </div>
                               <div class="timeline-meta">Срок: ${formatDate(item.dueDate)}</div>
-                              <div class="timeline-meta">${escapeHtml(item.teacherNote || "Комментария преподавателя пока нет")}</div>
+                              <div class="timeline-meta">${item.teacherNote || "Комментария преподавателя пока нет"}</div>
                               <div class="student-actions">
                                 <button class="tag-btn" data-homework-status="${item.id}:submitted">На проверке</button>
                                 <button class="tag-btn" data-homework-status="${item.id}:rework">Доработать</button>
@@ -548,13 +355,12 @@ function renderPortalsView() {
   const students = filteredStudents();
 
   return `
-    ${renderNoticeBanner()}
     <section class="panel">
       <div class="students-toolbar">
         <div>
           <p class="eyebrow">Личные кабинеты</p>
           <h2 class="section-title">Кабинеты учеников</h2>
-          <p class="section-subtitle">Каждый кабинет теперь тоже хранится в базе этого аккаунта</p>
+          <p class="section-subtitle">Отдельная витрина, которую можно показать ученику как его собственный интерфейс</p>
         </div>
       </div>
       <div class="portal-grid">
@@ -565,15 +371,15 @@ function renderPortalsView() {
               <article class="portal-card">
                 <div class="student-card-header">
                   <div class="student-avatar">${getInitials(student.name)}</div>
-                  <span class="portal-token">${escapeHtml(student.portalCode)}</span>
+                  <span class="portal-token">${student.portalCode}</span>
                 </div>
                 <div>
-                  <h3>${escapeHtml(student.name)}</h3>
-                  <div class="homework-meta">${escapeHtml(student.subject)}</div>
+                  <h3>${student.name}</h3>
+                  <div class="homework-meta">${student.subject}</div>
                 </div>
                 <div class="info-list">
                   <div class="info-line"><span>Домашки</span><strong>${stats.homeworkOpen}</strong></div>
-                  <div class="info-line"><span>Ближайший урок</span><strong>${escapeHtml(stats.nextLesson || "Нет")}</strong></div>
+                  <div class="info-line"><span>Ближайший урок</span><strong>${stats.nextLesson || "Нет"}</strong></div>
                   <div class="info-line"><span>Прогресс</span><strong>${stats.averageProgress}%</strong></div>
                 </div>
                 <div class="student-actions">
@@ -601,11 +407,10 @@ function renderProfileView() {
   const homeworks = state.data.homeworks.filter((item) => item.studentId === student.id).sort(sortByDateDesc);
 
   return `
-    ${renderNoticeBanner()}
     <section class="section-head">
       <div>
         <p class="eyebrow">Профиль ученика</p>
-        <h2 class="section-title">${escapeHtml(student.name)}</h2>
+        <h2 class="section-title">${student.name}</h2>
       </div>
       <div class="inline-actions">
         <button class="ghost-btn" id="backToStudentsBtn">К списку</button>
@@ -618,8 +423,8 @@ function renderProfileView() {
       <div class="profile-summary">
         <article class="panel student-hero">
           <div class="student-avatar">${getInitials(student.name)}</div>
-          <h3 class="student-name">${escapeHtml(student.name)}</h3>
-          <p class="student-subject">${escapeHtml(student.subject)}</p>
+          <h3 class="student-name">${student.name}</h3>
+          <p class="student-subject">${student.subject}</p>
           <div class="stat-row">
             <span class="badge ${student.lessonsLeft <= 1 ? "is-danger" : "is-success"}">${student.lessonsLeft} уроков осталось</span>
             <span class="badge">${formatMoney(student.balance)}</span>
@@ -635,14 +440,14 @@ function renderProfileView() {
         <article class="panel">
           <h3 class="section-title">Детали</h3>
           <div class="info-list">
-            <div class="info-line"><span>Телефон</span><strong>${escapeHtml(student.phone || "Не указан")}</strong></div>
+            <div class="info-line"><span>Телефон</span><strong>${student.phone || "Не указан"}</strong></div>
             <div class="info-line"><span>Ставка</span><strong>${formatMoney(student.rate)}</strong></div>
-            <div class="info-line"><span>Цель</span><strong>${escapeHtml(student.goal || "Без цели")}</strong></div>
-            <div class="info-line"><span>Код кабинета</span><strong>${escapeHtml(student.portalCode)}</strong></div>
+            <div class="info-line"><span>Цель</span><strong>${student.goal || "Без цели"}</strong></div>
+            <div class="info-line"><span>Код кабинета</span><strong>${student.portalCode}</strong></div>
           </div>
           <div>
             <p class="eyebrow">Заметки</p>
-            <p>${escapeHtml(student.notes || "Пока без заметок.")}</p>
+            <p>${student.notes || "Пока без заметок."}</p>
           </div>
         </article>
       </div>
@@ -664,7 +469,7 @@ function renderProfileView() {
                         <article class="timeline-item">
                           <div>
                             <strong>${formatMoney(item.amount)}</strong>
-                            <div class="timeline-meta">${escapeHtml(item.comment || "Без комментария")}</div>
+                            <div class="timeline-meta">${item.comment || "Без комментария"}</div>
                           </div>
                           <div class="timeline-meta">${formatDate(item.date)}</div>
                         </article>
@@ -680,18 +485,52 @@ function renderProfileView() {
           <div class="section-head">
             <div>
               <h3 class="section-title">Уроки и ДЗ</h3>
-              <p class="section-subtitle">Быстрый обзор по ученику</p>
+              <p class="section-subtitle">Расписание и домашняя работа в одном блоке</p>
             </div>
           </div>
           <div class="list">
             ${
               lessons.length
-                ? lessons.slice(0, 4).map(renderMiniLesson).join("")
+                ? lessons
+                    .slice(0, 4)
+                    .map(
+                      (lesson) => `
+                        <article class="timeline-item is-compact">
+                          <div>
+                            <strong>${formatLessonDate(lesson.date, lesson.time)}</strong>
+                            <div class="timeline-meta">${lesson.topic || "Без темы"}</div>
+                          </div>
+                          <div>
+                            <span class="badge ${lesson.status === "cancelled" ? "is-danger" : lesson.status === "done" ? "is-success" : ""}">
+                              ${lessonStatusLabel(lesson.status)}
+                            </span>
+                          </div>
+                        </article>
+                      `
+                    )
+                    .join("")
                 : '<div class="empty-state">Занятий пока нет.</div>'
             }
             ${
               homeworks.length
-                ? homeworks.slice(0, 4).map(renderMiniHomework).join("")
+                ? homeworks
+                    .slice(0, 4)
+                    .map(
+                      (homework) => `
+                        <article class="timeline-item is-compact">
+                          <div>
+                            <strong>${homework.title}</strong>
+                            <div class="timeline-meta">до ${formatDate(homework.dueDate)}</div>
+                          </div>
+                          <div>
+                            <span class="badge ${homework.status === "reviewed" ? "is-success" : homework.status === "rework" ? "is-danger" : ""}">
+                              ${homeworkStatusLabel(homework.status)}
+                            </span>
+                          </div>
+                        </article>
+                      `
+                    )
+                    .join("")
                 : '<div class="empty-state">Домашних заданий пока нет.</div>'
             }
           </div>
@@ -713,26 +552,27 @@ function renderCabinetView() {
   const lessons = state.data.lessons.filter((item) => item.studentId === student.id).sort(sortByDateTime).slice(0, 5);
 
   return `
-    ${renderNoticeBanner()}
     <section class="portal-hero">
       <div class="section-head">
         <div>
           <p class="eyebrow">Личный кабинет ученика</p>
-          <h2 class="hero-title">${escapeHtml(student.name)}</h2>
-          <p class="hero-copy">Здесь ученик видит ближайшие уроки, домашние задания и комментарии преподавателя.</p>
+          <h2 class="hero-title">${student.name}</h2>
+          <p class="hero-copy">
+            Здесь ученик видит ближайшие занятия, домашние задания, комментарии преподавателя и текущий учебный ритм.
+          </p>
         </div>
         <div class="inline-actions">
           <button class="ghost-btn" id="cabinetBackBtn">К кабинетам</button>
-          <span class="portal-token">${escapeHtml(student.portalCode)}</span>
+          <span class="portal-token">${student.portalCode}</span>
         </div>
       </div>
     </section>
 
     <section class="metrics-grid">
       ${metricCard("Остаток уроков", student.lessonsLeft, "Оплаченные занятия")}
-      ${metricCard("Баланс", formatMoney(student.balance), "Текущий остаток")}
-      ${metricCard("Прогресс ДЗ", `${stats.averageProgress}%`, "Средний прогресс")}
-      ${metricCard("Следующий урок", stats.nextLesson || "Нет", "Ближайшая запись")}
+      ${metricCard("Баланс", formatMoney(student.balance), "Текущий доступный остаток")}
+      ${metricCard("Прогресс ДЗ", `${stats.averageProgress}%`, "Средний прогресс по заданиям")}
+      ${metricCard("Следующий урок", stats.nextLesson || "Нет", "Ближайшая запись в расписании")}
     </section>
 
     <section class="portal-layout">
@@ -740,15 +580,15 @@ function renderCabinetView() {
         <article class="panel">
           <h3 class="section-title">О курсе</h3>
           <div class="info-list">
-            <div class="info-line"><span>Предмет</span><strong>${escapeHtml(student.subject)}</strong></div>
-            <div class="info-line"><span>Цель</span><strong>${escapeHtml(student.goal || "Уточняется")}</strong></div>
-            <div class="info-line"><span>Контакт</span><strong>${escapeHtml(student.phone || "Через преподавателя")}</strong></div>
+            <div class="info-line"><span>Предмет</span><strong>${student.subject}</strong></div>
+            <div class="info-line"><span>Цель</span><strong>${student.goal || "Уточняется"}</strong></div>
+            <div class="info-line"><span>Контакт</span><strong>${student.phone || "Через преподавателя"}</strong></div>
           </div>
         </article>
 
         <article class="panel">
           <h3 class="section-title">Комментарий преподавателя</h3>
-          <p class="muted-copy">${escapeHtml(student.notes || "Здесь могут появляться заметки и ориентиры по учебе.")}</p>
+          <p class="muted-copy">${student.notes || "Здесь преподаватель может оставлять мотивационные заметки и ориентиры по работе."}</p>
         </article>
       </div>
 
@@ -757,13 +597,23 @@ function renderCabinetView() {
           <div class="section-head">
             <div>
               <h3 class="section-title">Ближайшие занятия</h3>
-              <p class="section-subtitle">К чему готовиться сейчас</p>
+              <p class="section-subtitle">То, к чему стоит подготовиться сейчас</p>
             </div>
           </div>
           <div class="list">
             ${
               lessons.length
-                ? lessons.map(renderCabinetLesson).join("")
+                ? lessons.map(
+                    (lesson) => `
+                      <article class="timeline-item">
+                        <div>
+                          <strong>${formatLessonDate(lesson.date, lesson.time)}</strong>
+                          <div class="timeline-meta">${lesson.topic || "Без темы"}</div>
+                        </div>
+                        <div class="timeline-meta">${lesson.duration} мин</div>
+                      </article>
+                    `
+                  ).join("")
                 : '<div class="empty-state">Пока нет записанных уроков.</div>'
             }
           </div>
@@ -773,13 +623,27 @@ function renderCabinetView() {
           <div class="section-head">
             <div>
               <h3 class="section-title">Домашние задания</h3>
-              <p class="section-subtitle">Все выданные работы</p>
+              <p class="section-subtitle">Что уже выдано и какой статус у каждой работы</p>
             </div>
           </div>
           <div class="list">
             ${
               homeworks.length
-                ? homeworks.map(renderCabinetHomework).join("")
+                ? homeworks.map(
+                    (item) => `
+                      <article class="homework-card">
+                        <div>
+                          <h4>${item.title}</h4>
+                          <div class="homework-meta">${homeworkStatusLabel(item.status)} • до ${formatDate(item.dueDate)}</div>
+                        </div>
+                        <div class="muted-copy">${item.description || "Описание пока не добавлено."}</div>
+                        <div class="progress-track">
+                          <div class="progress-fill" style="width: ${clampProgress(item.progress)}%"></div>
+                        </div>
+                        <div class="muted-copy">${item.teacherNote || "Комментарий преподавателя появится после проверки."}</div>
+                      </article>
+                    `
+                  ).join("")
                 : '<div class="empty-state">Сейчас домашних заданий нет.</div>'
             }
           </div>
@@ -794,13 +658,12 @@ function renderCalendarView() {
   const lessons = [...state.data.lessons].sort(sortByDateTime);
 
   return `
-    ${renderNoticeBanner()}
     <section class="panel">
       <div class="section-head">
         <div>
           <p class="eyebrow">Недельный обзор</p>
           <h2 class="section-title">Календарь</h2>
-          <p class="section-subtitle">Все занятия текущего аккаунта по неделе</p>
+          <p class="section-subtitle">Ближайшие занятия по всей базе учеников</p>
         </div>
       </div>
       <div class="calendar-grid">
@@ -818,8 +681,8 @@ function renderCalendarView() {
                           return `
                             <div class="calendar-chip">
                               <strong>${lesson.time}</strong>
-                              ${escapeHtml(student?.name || "Ученик")}
-                              <div class="timeline-meta">${escapeHtml(student?.subject || "")}</div>
+                              ${student?.name || "Ученик"}
+                              <div class="timeline-meta">${student?.subject || ""}</div>
                             </div>
                           `;
                         })
@@ -870,7 +733,7 @@ function bindStudentsView() {
     button.addEventListener("click", () => openHomeworkModal(null, button.dataset.openHomework));
   });
   appView.querySelectorAll("[data-delete-student]").forEach((button) => {
-    button.addEventListener("click", () => handleDeleteStudent(button.dataset.deleteStudent));
+    button.addEventListener("click", () => deleteStudent(button.dataset.deleteStudent));
   });
 }
 
@@ -882,16 +745,14 @@ function bindHomeworkView() {
   });
 
   appView.querySelectorAll("[data-homework-status]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", () => {
       const [homeworkId, nextStatus] = button.dataset.homeworkStatus.split(":");
-      try {
-        await backend.updateHomeworkStatus(state.user, homeworkId, nextStatus);
-        state.data = normalizeData(await backend.loadData(state.user));
-        render();
-      } catch (error) {
-        state.notice = getErrorMessage(error);
-        render();
-      }
+      const homework = findHomework(homeworkId);
+      if (!homework) return;
+      homework.status = nextStatus;
+      if (nextStatus === "reviewed" && homework.progress < 100) homework.progress = 100;
+      persist();
+      render();
     });
   });
 
@@ -926,6 +787,8 @@ function bindCabinetView() {
     render();
   });
 }
+
+function bindCalendarView() {}
 
 function bindOpenProfileButtons() {
   appView.querySelectorAll("[data-open-profile]").forEach((button) => {
@@ -964,32 +827,36 @@ function openStudentModal(studentId = null) {
     form.notes.value = student.notes || "";
   }
 
-  form.addEventListener("submit", async (event) => {
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
     const formData = new FormData(form);
     const payload = {
-      id: student?.id,
       name: String(formData.get("name")).trim(),
       subject: String(formData.get("subject")).trim(),
-      rate: Number(formData.get("rate") || 0),
+      rate: Number(formData.get("rate")),
       phone: String(formData.get("phone")).trim(),
       goal: String(formData.get("goal")).trim(),
       notes: String(formData.get("notes")).trim(),
-      portalCode: student?.portalCode,
-      balance: student?.balance || 0,
-      lessonsLeft: student?.lessonsLeft || 0
     };
 
-    try {
-      await backend.saveStudent(state.user, payload);
-      state.data = normalizeData(await backend.loadData(state.user));
-      closeModal();
-      render();
-    } catch (error) {
-      state.notice = getErrorMessage(error);
-      closeModal();
-      render();
+    if (!payload.name || !payload.subject || !payload.rate) return;
+
+    if (student) {
+      Object.assign(student, payload);
+    } else {
+      state.data.students.unshift({
+        id: makeId(),
+        portalCode: makePortalCode(payload.name),
+        ...payload,
+        balance: 0,
+        lessonsLeft: 0,
+        createdAt: new Date().toISOString(),
+      });
     }
+
+    persist();
+    render();
+    closeModal();
   });
 
   showModal();
@@ -1005,25 +872,26 @@ function openPaymentModal(studentId) {
   const form = document.getElementById("paymentForm");
   form.date.value = todayISO();
 
-  form.addEventListener("submit", async (event) => {
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
     const formData = new FormData(form);
+    const amount = Number(formData.get("amount"));
+    if (!amount) return;
 
-    try {
-      await backend.savePayment(state.user, {
-        studentId,
-        amount: Number(formData.get("amount") || 0),
-        date: String(formData.get("date")),
-        comment: String(formData.get("comment")).trim()
-      });
-      state.data = normalizeData(await backend.loadData(state.user));
-      closeModal();
-      render();
-    } catch (error) {
-      state.notice = getErrorMessage(error);
-      closeModal();
-      render();
-    }
+    state.data.transactions.unshift({
+      id: makeId(),
+      studentId,
+      amount,
+      date: String(formData.get("date")),
+      comment: String(formData.get("comment")).trim(),
+    });
+
+    student.balance += amount;
+    student.lessonsLeft += Math.floor(amount / student.rate);
+
+    persist();
+    render();
+    closeModal();
   });
 
   showModal();
@@ -1041,27 +909,29 @@ function openLessonModal(studentId) {
   form.time.value = "16:00";
   form.duration.value = "60";
 
-  form.addEventListener("submit", async (event) => {
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
     const formData = new FormData(form);
+    const status = String(formData.get("status"));
 
-    try {
-      await backend.saveLesson(state.user, {
-        studentId,
-        date: String(formData.get("date")),
-        time: String(formData.get("time")),
-        duration: Number(formData.get("duration") || 0),
-        status: String(formData.get("status")),
-        topic: String(formData.get("topic")).trim()
-      });
-      state.data = normalizeData(await backend.loadData(state.user));
-      closeModal();
-      render();
-    } catch (error) {
-      state.notice = getErrorMessage(error);
-      closeModal();
-      render();
+    state.data.lessons.unshift({
+      id: makeId(),
+      studentId,
+      date: String(formData.get("date")),
+      time: String(formData.get("time")),
+      duration: Number(formData.get("duration")),
+      status,
+      topic: String(formData.get("topic")).trim(),
+    });
+
+    if (status === "done" && student.lessonsLeft > 0) {
+      student.lessonsLeft -= 1;
+      student.balance = Math.max(0, student.balance - student.rate);
     }
+
+    persist();
+    render();
+    closeModal();
   });
 
   showModal();
@@ -1093,77 +963,197 @@ function openHomeworkModal(homeworkId = null, studentId = state.selectedStudentI
     form.dueDate.value = todayISO();
   }
 
-  form.addEventListener("submit", async (event) => {
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
     const formData = new FormData(form);
+    const payload = {
+      title: String(formData.get("title")).trim(),
+      dueDate: String(formData.get("dueDate")),
+      status: String(formData.get("status")),
+      progress: clampProgress(Number(formData.get("progress"))),
+      description: String(formData.get("description")).trim(),
+      teacherNote: String(formData.get("teacherNote")).trim(),
+    };
 
-    try {
-      await backend.saveHomework(state.user, {
-        id: homework?.id,
-        studentId: homework?.studentId || student?.id,
-        title: String(formData.get("title")).trim(),
-        dueDate: String(formData.get("dueDate")),
-        status: String(formData.get("status")),
-        progress: Number(formData.get("progress") || 0),
-        description: String(formData.get("description")).trim(),
-        teacherNote: String(formData.get("teacherNote")).trim()
+    if (!payload.title || !payload.dueDate || !student) return;
+
+    if (homework) {
+      Object.assign(homework, payload);
+    } else {
+      state.data.homeworks.unshift({
+        id: makeId(),
+        studentId: student.id,
+        ...payload,
       });
-      state.data = normalizeData(await backend.loadData(state.user));
-      closeModal();
-      render();
-    } catch (error) {
-      state.notice = getErrorMessage(error);
-      closeModal();
-      render();
     }
+
+    persist();
+    render();
+    closeModal();
   });
 
   showModal();
 }
 
-async function handleDeleteStudent(studentId) {
+function deleteStudent(studentId) {
   const student = findStudent(studentId);
   if (!student) return;
   if (!window.confirm(`Удалить ученика ${student.name}?`)) return;
 
-  try {
-    await backend.deleteStudent(state.user, studentId);
-    state.data = normalizeData(await backend.loadData(state.user));
-    if (state.selectedStudentId === studentId) {
-      state.selectedStudentId = null;
-      state.currentView = "students";
-    }
-    render();
-  } catch (error) {
-    state.notice = getErrorMessage(error);
-    render();
+  state.data.students = state.data.students.filter((item) => item.id !== studentId);
+  state.data.transactions = state.data.transactions.filter((item) => item.studentId !== studentId);
+  state.data.lessons = state.data.lessons.filter((item) => item.studentId !== studentId);
+  state.data.homeworks = state.data.homeworks.filter((item) => item.studentId !== studentId);
+
+  if (state.selectedStudentId === studentId) {
+    state.selectedStudentId = null;
+    state.currentView = "students";
   }
+
+  persist();
+  render();
 }
 
-function showModal() {
-  modalBackdrop.classList.remove("hidden");
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (error) {
+    console.error("Не удалось прочитать localStorage", error);
+  }
+  return createSeedData();
 }
 
-function closeModal() {
-  modalBackdrop.classList.add("hidden");
-  modalRoot.innerHTML = "";
+function persist() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
 }
 
-function emptyData() {
+function createSeedData() {
+  const today = new Date();
+
+  const plusDays = (days, time) => {
+    const target = new Date(today);
+    target.setDate(today.getDate() + days);
+    target.setHours(0, 0, 0, 0);
+    return {
+      date: toISODate(target),
+      time,
+    };
+  };
+
   return {
-    students: [],
-    transactions: [],
-    lessons: [],
-    homeworks: []
+    students: [
+      {
+        id: "student-1",
+        portalCode: "ANNA-241",
+        name: "Анна Соколова",
+        subject: "Математика",
+        rate: 1800,
+        balance: 5400,
+        lessonsLeft: 3,
+        phone: "+7 999 123-45-67",
+        goal: "Подготовка к ЕГЭ на 85+",
+        notes: "Сильная мотивация. Лучше заходят короткие задания и разбор ошибок в начале урока.",
+        createdAt: today.toISOString(),
+      },
+      {
+        id: "student-2",
+        portalCode: "ILYA-815",
+        name: "Илья Миронов",
+        subject: "Английский",
+        rate: 1500,
+        balance: 1500,
+        lessonsLeft: 1,
+        phone: "+7 999 222-11-22",
+        goal: "Разговорная практика для собеседований",
+        notes: "Фокус на speaking, ответы без длинных пауз и уверенная самопрезентация.",
+        createdAt: today.toISOString(),
+      },
+      {
+        id: "student-3",
+        portalCode: "MARIA-502",
+        name: "Мария Ким",
+        subject: "Физика",
+        rate: 2000,
+        balance: 8000,
+        lessonsLeft: 4,
+        phone: "",
+        goal: "Олимпиадные задачи",
+        notes: "Нужна повышенная сложность и меньше типовых задач.",
+        createdAt: today.toISOString(),
+      },
+    ],
+    transactions: [
+      { id: "tr-1", studentId: "student-1", amount: 5400, date: todayISO(), comment: "Пакет из трех занятий" },
+      { id: "tr-2", studentId: "student-2", amount: 3000, date: todayISO(), comment: "Аванс за две недели" },
+      { id: "tr-3", studentId: "student-3", amount: 8000, date: todayISO(), comment: "Оплата за месяц" },
+    ],
+    lessons: [
+      { id: "ls-1", studentId: "student-1", ...plusDays(0, "17:00"), duration: 60, status: "planned", topic: "Параметры и графики" },
+      { id: "ls-2", studentId: "student-2", ...plusDays(1, "19:00"), duration: 60, status: "planned", topic: "HR interview" },
+      { id: "ls-3", studentId: "student-3", ...plusDays(2, "16:30"), duration: 90, status: "planned", topic: "Электродинамика" },
+      { id: "ls-4", studentId: "student-1", ...plusDays(-2, "17:00"), duration: 60, status: "done", topic: "Производные" },
+    ],
+    homeworks: [
+      {
+        id: "hw-1",
+        studentId: "student-1",
+        title: "Вариант 12, задачи 14-16",
+        dueDate: toISODate(addDays(today, 1)),
+        status: "submitted",
+        progress: 90,
+        description: "Решить три задачи с полным оформлением и коротким объяснением метода.",
+        teacherNote: "Проверь аккуратность в последнем номере и распиши переходы.",
+      },
+      {
+        id: "hw-2",
+        studentId: "student-2",
+        title: "Self-introduction for interviews",
+        dueDate: toISODate(addDays(today, 2)),
+        status: "rework",
+        progress: 65,
+        description: "Подготовить устную самопрезентацию на 90 секунд и записать ключевые фразы.",
+        teacherNote: "Добавь примеры достижений и убери повторяющиеся конструкции.",
+      },
+      {
+        id: "hw-3",
+        studentId: "student-3",
+        title: "Разбор задачи по электрическому полю",
+        dueDate: toISODate(addDays(today, 4)),
+        status: "reviewed",
+        progress: 100,
+        description: "Решение с альтернативным способом и проверкой размерности.",
+        teacherNote: "Очень хороший ход решения, особенно в части проверки результата.",
+      },
+    ],
   };
 }
 
-function normalizeData(data) {
+function deriveData() {
+  const students = filteredStudents();
+  const homeworks = filteredHomeworks();
+  const transactions = state.data.transactions;
+  const lessons = state.data.lessons;
+  const totalRevenue = transactions.reduce((sum, item) => sum + item.amount, 0);
+  const averagePayment = transactions.length ? Math.round(totalRevenue / transactions.length) : 0;
+  const totalLessonsLeft = state.data.students.reduce((sum, student) => sum + student.lessonsLeft, 0);
+  const weekLessons = getWeekDays().reduce((count, day) => count + lessons.filter((item) => item.date === day.iso).length, 0);
+  const activeStudents = state.data.students.filter((student) => student.lessonsLeft > 0).length;
+  const reviewedHomeworkCount = state.data.homeworks.filter((item) => item.status === "reviewed").length;
+  const upcomingLessons = lessons.filter((lesson) => lesson.status === "planned").sort(sortByDateTime);
+
   return {
-    students: [...(data.students || [])].sort(sortByName),
-    transactions: [...(data.transactions || [])].sort(sortByDateDesc),
-    lessons: [...(data.lessons || [])].sort(sortByDateTime),
-    homeworks: [...(data.homeworks || [])].sort(sortByDateDesc)
+    students,
+    homeworks,
+    transactions,
+    lessons,
+    totalRevenue,
+    averagePayment,
+    totalLessonsLeft,
+    weekLessons,
+    activeStudents,
+    reviewedHomeworkCount,
+    upcomingLessons,
   };
 }
 
@@ -1184,41 +1174,18 @@ function filteredHomeworks() {
 
   return state.data.homeworks.filter((homework) => {
     const student = findStudent(homework.studentId);
-    return [homework.title, homework.description, homework.teacherNote, student?.name, student?.subject].some(
-      (value) => String(value || "").toLowerCase().includes(query)
+    return [homework.title, homework.description, homework.teacherNote, student?.name, student?.subject].some((value) =>
+      String(value || "").toLowerCase().includes(query)
     );
   });
 }
 
-function deriveData() {
-  const totalRevenue = state.data.transactions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const totalLessonsLeft = state.data.students.reduce((sum, student) => sum + Number(student.lessonsLeft || 0), 0);
-  const weekLessons = getWeekDays().reduce(
-    (count, day) => count + state.data.lessons.filter((item) => item.date === day.iso).length,
-    0
-  );
-  const activeStudents = state.data.students.filter((student) => Number(student.lessonsLeft || 0) > 0).length;
-  const reviewedHomeworkCount = state.data.homeworks.filter((item) => item.status === "reviewed").length;
-  const upcomingLessons = state.data.lessons.filter((lesson) => lesson.status === "planned").sort(sortByDateTime);
-
-  return {
-    students: filteredStudents(),
-    homeworks: filteredHomeworks(),
-    totalRevenue,
-    totalLessonsLeft,
-    weekLessons,
-    activeStudents,
-    reviewedHomeworkCount,
-    upcomingLessons
-  };
+function selectedStudent() {
+  return findStudent(state.selectedStudentId);
 }
 
 function findStudent(studentId) {
   return state.data.students.find((student) => student.id === studentId);
-}
-
-function selectedStudent() {
-  return findStudent(state.selectedStudentId);
 }
 
 function findHomework(homeworkId) {
@@ -1236,142 +1203,25 @@ function getStudentStats(studentId) {
   return {
     homeworkOpen: homeworks.filter((item) => item.status !== "reviewed").length,
     nextLesson: nextLesson ? formatLessonDate(nextLesson.date, nextLesson.time) : "",
-    averageProgress
+    averageProgress,
   };
 }
 
-function renderSetupBanner() {
-  return `
-    <section class="panel panel--notice">
-      <div>
-        <p class="eyebrow">Firebase еще не включен</p>
-        <h3 class="section-title">Сейчас сайт работает в локальном demo-режиме.</h3>
-        <p class="section-subtitle">
-          Открой файл <code>firebase-config.js</code>, вставь web config из Firebase Console и включи
-          <code>enabled: true</code>. После этого регистрация и база автоматически поедут в облако.
-        </p>
-      </div>
-    </section>
-  `;
+function showModal() {
+  modalBackdrop.classList.remove("hidden");
 }
 
-function renderNoticeBanner() {
-  if (!state.notice) return "";
-  return `
-    <section class="panel panel--danger">
-      <strong>Сообщение системы</strong>
-      <div class="section-subtitle">${escapeHtml(state.notice)}</div>
-    </section>
-  `;
-}
-
-function renderLoadingPanel(text) {
-  return `
-    <section class="panel panel--center">
-      <p class="eyebrow">Подождите</p>
-      <h2 class="section-title">${escapeHtml(text)}</h2>
-    </section>
-  `;
-}
-
-function renderUpcomingLessonCard(lesson) {
-  const student = findStudent(lesson.studentId);
-  return `
-    <article class="timeline-item">
-      <div>
-        <strong>${escapeHtml(student?.name || "Без имени")}</strong>
-        <div class="timeline-meta">${escapeHtml(lesson.topic || student?.subject || "Урок")}</div>
-      </div>
-      <div>
-        <strong>${formatLessonDate(lesson.date, lesson.time)}</strong>
-        <div class="timeline-meta">${lesson.duration} мин</div>
-      </div>
-    </article>
-  `;
-}
-
-function renderReviewCard(homework) {
-  const student = findStudent(homework.studentId);
-  return `
-    <article class="timeline-item">
-      <div>
-        <strong>${escapeHtml(homework.title)}</strong>
-        <div class="timeline-meta">${escapeHtml(student?.name || "Ученик")} • ${escapeHtml(student?.subject || "")}</div>
-      </div>
-      <div>
-        <strong>${homeworkStatusLabel(homework.status)}</strong>
-        <div class="timeline-meta">до ${formatDate(homework.dueDate)}</div>
-      </div>
-    </article>
-  `;
-}
-
-function renderMiniLesson(lesson) {
-  return `
-    <article class="timeline-item is-compact">
-      <div>
-        <strong>${formatLessonDate(lesson.date, lesson.time)}</strong>
-        <div class="timeline-meta">${escapeHtml(lesson.topic || "Без темы")}</div>
-      </div>
-      <div>
-        <span class="badge ${lesson.status === "cancelled" ? "is-danger" : lesson.status === "done" ? "is-success" : ""}">
-          ${lessonStatusLabel(lesson.status)}
-        </span>
-      </div>
-    </article>
-  `;
-}
-
-function renderMiniHomework(homework) {
-  return `
-    <article class="timeline-item is-compact">
-      <div>
-        <strong>${escapeHtml(homework.title)}</strong>
-        <div class="timeline-meta">до ${formatDate(homework.dueDate)}</div>
-      </div>
-      <div>
-        <span class="badge ${homework.status === "reviewed" ? "is-success" : homework.status === "rework" ? "is-danger" : ""}">
-          ${homeworkStatusLabel(homework.status)}
-        </span>
-      </div>
-    </article>
-  `;
-}
-
-function renderCabinetLesson(lesson) {
-  return `
-    <article class="timeline-item">
-      <div>
-        <strong>${formatLessonDate(lesson.date, lesson.time)}</strong>
-        <div class="timeline-meta">${escapeHtml(lesson.topic || "Без темы")}</div>
-      </div>
-      <div class="timeline-meta">${lesson.duration} мин</div>
-    </article>
-  `;
-}
-
-function renderCabinetHomework(item) {
-  return `
-    <article class="homework-card">
-      <div>
-        <h4>${escapeHtml(item.title)}</h4>
-        <div class="homework-meta">${homeworkStatusLabel(item.status)} • до ${formatDate(item.dueDate)}</div>
-      </div>
-      <div class="muted-copy">${escapeHtml(item.description || "Описание пока не добавлено.")}</div>
-      <div class="progress-track">
-        <div class="progress-fill" style="width: ${clampProgress(item.progress)}%"></div>
-      </div>
-      <div class="muted-copy">${escapeHtml(item.teacherNote || "Комментарий преподавателя появится после проверки.")}</div>
-    </article>
-  `;
+function closeModal() {
+  modalBackdrop.classList.add("hidden");
+  modalRoot.innerHTML = "";
 }
 
 function metricCard(label, value, subline) {
   return `
     <article class="metric-card">
-      <div class="metric-label">${escapeHtml(label)}</div>
-      <div class="metric-value">${escapeHtml(String(value))}</div>
-      <div class="metric-sub">${escapeHtml(subline)}</div>
+      <div class="metric-label">${label}</div>
+      <div class="metric-value">${value}</div>
+      <div class="metric-sub">${subline}</div>
     </article>
   `;
 }
@@ -1384,7 +1234,7 @@ function formatDate(value) {
   return new Date(`${value}T00:00:00`).toLocaleDateString("ru-RU", {
     day: "2-digit",
     month: "short",
-    year: "numeric"
+    year: "numeric",
   });
 }
 
@@ -1393,7 +1243,7 @@ function formatLessonDate(date, time) {
 }
 
 function getInitials(name) {
-  return String(name || "")
+  return name
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
@@ -1403,11 +1253,21 @@ function getInitials(name) {
 }
 
 function todayISO() {
-  const date = new Date();
+  return toISODate(new Date());
+}
+
+function toISODate(value) {
+  const date = new Date(value);
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function getWeekDays() {
@@ -1427,18 +1287,10 @@ function getWeekDays() {
       label: date.toLocaleDateString("ru-RU", {
         weekday: "short",
         day: "numeric",
-        month: "short"
-      })
+        month: "short",
+      }),
     };
   });
-}
-
-function toISODate(value) {
-  const date = new Date(value);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 function sortByDateTime(a, b) {
@@ -1447,10 +1299,6 @@ function sortByDateTime(a, b) {
 
 function sortByDateDesc(a, b) {
   return new Date(b.dueDate || b.date) - new Date(a.dueDate || a.date);
-}
-
-function sortByName(a, b) {
-  return String(a.name || "").localeCompare(String(b.name || ""), "ru");
 }
 
 function lessonStatusLabel(status) {
@@ -1470,23 +1318,15 @@ function clampProgress(value) {
   return Math.max(0, Math.min(100, Number(value || 0)));
 }
 
-function getErrorMessage(error) {
-  const code = error?.code || "";
-  if (code.includes("auth/email-already-in-use")) return "Этот email уже зарегистрирован.";
-  if (code.includes("auth/invalid-credential") || code.includes("auth/wrong-password")) {
-    return "Неверная почта или пароль.";
+function makeId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
   }
-  if (code.includes("auth/invalid-email")) return "Укажи корректный email.";
-  if (code.includes("auth/weak-password")) return "Пароль слишком слабый. Минимум 6 символов.";
-  if (code.includes("permission-denied")) return "Firebase отклонил запрос. Проверь Firestore rules и авторизацию.";
-  return error?.message || "Что-то пошло не так.";
+  return `id-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+function makePortalCode(name) {
+  const stem = getInitials(name).replace(/[^A-ZА-Я]/gi, "").toUpperCase() || "STU";
+  const suffix = Math.floor(100 + Math.random() * 900);
+  return `${stem}-${suffix}`;
 }

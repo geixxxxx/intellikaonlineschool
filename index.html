@@ -18,7 +18,9 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <div class="auth-shell hidden" id="authMount"></div>
+
+    <div class="app-shell" id="appShell">
       <aside class="sidebar">
         <div class="brand-mark">IN</div>
         <nav class="sidebar-nav">
@@ -38,6 +40,16 @@
             <h1>Intellika</h1>
           </div>
           <div class="topbar-actions">
+            <div class="account-cluster">
+              <div class="status-pill" id="backendStatus">Демо-режим</div>
+              <div class="user-chip">
+                <div>
+                  <div class="chip-label">Аккаунт</div>
+                  <strong id="userEmail">guest@demo.local</strong>
+                </div>
+                <button class="ghost-btn" id="logoutBtn">Выйти</button>
+              </div>
+            </div>
             <label class="search-field">
               <span>Поиск</span>
               <input id="searchInput" type="search" placeholder="Имя, предмет, заметка" />
@@ -223,6 +235,6 @@
       </form>
     </template>
 
-    <script src="./app.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

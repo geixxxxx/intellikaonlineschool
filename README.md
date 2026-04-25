@@ -7,6 +7,8 @@ Intellika is a ready-to-publish JavaScript project for tutors. It includes:
 - homework review board
 - student portals
 - lesson calendar
+- email/password authentication
+- Cloud Firestore database support
 
 ## Run locally
 
@@ -26,11 +28,65 @@ The app will open at:
 http://localhost:3000
 ```
 
+## Demo mode and cloud mode
+
+The project supports two modes:
+
+- Demo mode: works immediately after clone and stores data locally
+- Firebase mode: uses registration, login and Cloud Firestore
+
+If `firebase-config.js` still contains placeholder values, the app runs in demo mode.
+
+## Enable Firebase Auth and Firestore
+
+### 1. Create a Firebase project
+
+In Firebase Console:
+
+1. Create a project
+2. Add a Web app
+3. Copy the web config object
+
+### 2. Enable authentication
+
+In Firebase Console:
+
+1. Open `Authentication`
+2. Open `Sign-in method`
+3. Enable `Email/Password`
+
+### 3. Enable Cloud Firestore
+
+In Firebase Console:
+
+1. Open `Firestore Database`
+2. Create a database
+3. Start in production or test mode
+
+### 4. Paste config into the project
+
+Open [firebase-config.js](/Users/yaromirtribunsky/Documents/Codex/2026-04-25/javascript-import-react-usestate-useeffect-from/firebase-config.js) and replace the placeholder values with your Firebase web config, then set:
+
+```js
+enabled: true
+```
+
+### 5. Apply Firestore rules
+
+Use [firestore.rules](/Users/yaromirtribunsky/Documents/Codex/2026-04-25/javascript-import-react-usestate-useeffect-from/firestore.rules) in Firebase Console under:
+
+`Firestore Database -> Rules`
+
+These rules isolate each tutor's data under their own `users/{uid}` path.
+
 ## Project structure
 
 ```text
 .
 ├── app.js
+├── firebase-config.js
+├── firebase.js
+├── firestore.rules
 ├── index.html
 ├── package.json
 ├── server.js
@@ -90,5 +146,5 @@ npm start
 
 ## Notes
 
-- Data is currently stored in `localStorage`.
-- For production with real users, the next step is connecting a backend such as Firebase, Supabase or a custom API.
+- Without Firebase config, the app uses demo local storage.
+- With Firebase config, registration and login use Firebase Authentication and app data uses Cloud Firestore.
