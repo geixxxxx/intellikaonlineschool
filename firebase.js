@@ -1,43 +1,12 @@
 import { firebaseWebConfig } from "./firebase-config.js";
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-import {
-  createUserWithEmailAndPassword,
-  getAuth,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut,
-  updateProfile
-} from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
-import {
-  addDoc,
-  collection,
-  collectionGroup,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  getFirestore,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch
-} from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
 
 const STORAGE_KEY = "intellika-demo-v4";
 const firebaseEnabled = isFirebaseConfigured(firebaseWebConfig);
 
 let firebaseAuth = null;
 let firebaseDb = null;
+let firebaseSdk = null;
 const localAuthListeners = new Set();
-
-if (firebaseEnabled) {
-  const app = initializeApp(firebaseWebConfig);
-  firebaseAuth = getAuth(app);
-  firebaseDb = getFirestore(app);
-}
 
 export const backend = firebaseEnabled ? createFirebaseBackend() : createLocalBackend();
 
@@ -46,50 +15,65 @@ function createFirebaseBackend() {
     mode: "firebase",
     label: "Firebase Cloud",
     onAuthChange(callback) {
-      return onAuthStateChanged(firebaseAuth, async (authUser) => {
-        if (!authUser) {
-          callback(null);
-          return;
-        }
-        callback(await loadFirebaseSession(authUser));
-      });
+      let disposed = false;
+      let unsubscribe = () => {};
+      initFirebaseSdk()
+        .then((sdk) => {
+          if (disposed) return;
+          unsubscribe = sdk.onAuthStateChanged(firebaseAuth, async (authUser) => {
+            if (!authUser) {
+              callback(null);
+              return;
+            }
+            callback(await loadFirebaseSession(authUser));
+          });
+        })
+        .catch((error) => callback({ authError: error }));
+      return () => {
+        disposed = true;
+        unsubscribe();
+      };
     },
     async signIn(email, password) {
-      await signInWithEmailAndPassword(firebaseAuth, email, password);
+      const sdk = await initFirebaseSdk();
+      await sdk.signInWithEmailAndPassword(firebaseAuth, email, password);
     },
     async signUpTeacher({ email, password, displayName }) {
-      const credential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
-      if (displayName) await updateProfile(credential.user, { displayName });
-      await setDoc(doc(firebaseDb, "users", credential.user.uid), {
+      const sdk = await initFirebaseSdk();
+      const credential = await sdk.createUserWithEmailAndPassword(firebaseAuth, email, password);
+      if (displayName) await sdk.updateProfile(credential.user, { displayName });
+      await sdk.setDoc(sdk.doc(firebaseDb, "users", credential.user.uid), {
         role: "teacher",
         displayName: displayName || "",
         email,
-        createdAt: serverTimestamp()
+        createdAt: sdk.serverTimestamp()
       });
     },
     async signUpStudent({ email, password, displayName, accessCode }) {
+      const sdk = await initFirebaseSdk();
       const link = await resolveFirebaseStudentByAccessCode(accessCode);
       if (!link) throw new Error("Код ученика не найден.");
 
-      const credential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
-      if (displayName) await updateProfile(credential.user, { displayName });
+      const credential = await sdk.createUserWithEmailAndPassword(firebaseAuth, email, password);
+      if (displayName) await sdk.updateProfile(credential.user, { displayName });
 
-      await setDoc(doc(firebaseDb, "users", credential.user.uid), {
+      await sdk.setDoc(sdk.doc(firebaseDb, "users", credential.user.uid), {
         role: "student",
         email,
         displayName: displayName || link.student.name,
         teacherId: link.teacherId,
         studentId: link.studentId,
-        createdAt: serverTimestamp()
+        createdAt: sdk.serverTimestamp()
       });
 
-      await updateDoc(doc(firebaseDb, "users", link.teacherId, "students", link.studentId), {
+      await sdk.updateDoc(sdk.doc(firebaseDb, "users", link.teacherId, "students", link.studentId), {
         studentAuthUid: credential.user.uid,
         studentEmail: email
       });
     },
     async signOut() {
-      await signOut(firebaseAuth);
+      const sdk = await initFirebaseSdk();
+      await sdk.signOut(firebaseAuth);
     },
     async loadData(user) {
       return user.role === "teacher" ? loadTeacherData(user.uid) : loadStudentData(user.teacherId, user.studentId);
@@ -106,15 +90,16 @@ function createFirebaseBackend() {
     },
     async saveStudent(user, student) {
       ensureTeacher(user);
+      const sdk = await initFirebaseSdk();
       const payload = sanitizeStudent(student);
-      const studentsRef = collection(firebaseDb, "users", user.uid, "students");
+      const studentsRef = sdk.collection(firebaseDb, "users", user.uid, "students");
 
       if (student.id) {
-        await updateDoc(doc(studentsRef, student.id), payload);
+        await sdk.updateDoc(sdk.doc(studentsRef, student.id), payload);
         return student.id;
       }
 
-      const created = await addDoc(studentsRef, {
+      const created = await sdk.addDoc(studentsRef, {
         ...payload,
         createdAt: new Date().toISOString()
       });
@@ -122,13 +107,14 @@ function createFirebaseBackend() {
     },
     async savePayment(user, payment) {
       ensureTeacher(user);
-      const transactionsRef = collection(firebaseDb, "users", user.uid, "transactions");
-      const studentsRef = collection(firebaseDb, "users", user.uid, "students");
-      await addDoc(transactionsRef, sanitizePayment(payment));
+      const sdk = await initFirebaseSdk();
+      const transactionsRef = sdk.collection(firebaseDb, "users", user.uid, "transactions");
+      const studentsRef = sdk.collection(firebaseDb, "users", user.uid, "students");
+      await sdk.addDoc(transactionsRef, sanitizePayment(payment));
 
-      const studentRef = doc(studentsRef, payment.studentId);
+      const studentRef = sdk.doc(studentsRef, payment.studentId);
       const student = await loadDocData(studentRef);
-      await updateDoc(studentRef, {
+      await sdk.updateDoc(studentRef, {
         balance: Number(student.balance || 0) + Number(payment.amount || 0),
         lessonsLeft:
           Number(student.lessonsLeft || 0) + Math.floor(Number(payment.amount || 0) / Number(student.rate || 1))
@@ -136,11 +122,12 @@ function createFirebaseBackend() {
     },
     async saveLesson(user, lesson) {
       ensureTeacher(user);
-      await addDoc(collection(firebaseDb, "users", user.uid, "lessons"), sanitizeLesson(lesson));
+      const sdk = await initFirebaseSdk();
+      await sdk.addDoc(sdk.collection(firebaseDb, "users", user.uid, "lessons"), sanitizeLesson(lesson));
       if (lesson.status === "done") {
-        const studentRef = doc(firebaseDb, "users", user.uid, "students", lesson.studentId);
+        const studentRef = sdk.doc(firebaseDb, "users", user.uid, "students", lesson.studentId);
         const student = await loadDocData(studentRef);
-        await updateDoc(studentRef, {
+        await sdk.updateDoc(studentRef, {
           lessonsLeft: Math.max(0, Number(student.lessonsLeft || 0) - 1),
           balance: Math.max(0, Number(student.balance || 0) - Number(student.rate || 0))
         });
@@ -148,42 +135,45 @@ function createFirebaseBackend() {
     },
     async saveHomework(user, homework) {
       ensureTeacher(user);
+      const sdk = await initFirebaseSdk();
       const payload = sanitizeHomework(homework);
-      const collectionRef = collection(firebaseDb, "users", user.uid, "homeworks");
+      const collectionRef = sdk.collection(firebaseDb, "users", user.uid, "homeworks");
 
       if (homework.id) {
-        await updateDoc(doc(collectionRef, homework.id), payload);
+        await sdk.updateDoc(sdk.doc(collectionRef, homework.id), payload);
         return homework.id;
       }
 
-      const created = await addDoc(collectionRef, payload);
+      const created = await sdk.addDoc(collectionRef, payload);
       return created.id;
     },
     async updateHomeworkStatus(user, homeworkId, status) {
       const teacherId = user.role === "teacher" ? user.uid : user.teacherId;
-      const homeworkRef = doc(firebaseDb, "users", teacherId, "homeworks", homeworkId);
+      const sdk = await initFirebaseSdk();
+      const homeworkRef = sdk.doc(firebaseDb, "users", teacherId, "homeworks", homeworkId);
       const payload = { status };
       if (status === "reviewed") payload.progress = 100;
-      await updateDoc(homeworkRef, payload);
+      await sdk.updateDoc(homeworkRef, payload);
     },
     async deleteStudent(user, studentId) {
       ensureTeacher(user);
-      const batch = writeBatch(firebaseDb);
-      const studentRef = doc(firebaseDb, "users", user.uid, "students", studentId);
+      const sdk = await initFirebaseSdk();
+      const batch = sdk.writeBatch(firebaseDb);
+      const studentRef = sdk.doc(firebaseDb, "users", user.uid, "students", studentId);
       const student = await loadDocData(studentRef);
 
       batch.delete(studentRef);
 
       const related = await Promise.all([
-        getDocs(query(collection(firebaseDb, "users", user.uid, "transactions"), where("studentId", "==", studentId))),
-        getDocs(query(collection(firebaseDb, "users", user.uid, "lessons"), where("studentId", "==", studentId))),
-        getDocs(query(collection(firebaseDb, "users", user.uid, "homeworks"), where("studentId", "==", studentId)))
+        sdk.getDocs(sdk.query(sdk.collection(firebaseDb, "users", user.uid, "transactions"), sdk.where("studentId", "==", studentId))),
+        sdk.getDocs(sdk.query(sdk.collection(firebaseDb, "users", user.uid, "lessons"), sdk.where("studentId", "==", studentId))),
+        sdk.getDocs(sdk.query(sdk.collection(firebaseDb, "users", user.uid, "homeworks"), sdk.where("studentId", "==", studentId)))
       ]);
 
       related.forEach((snapshot) => snapshot.forEach((item) => batch.delete(item.ref)));
 
       if (student?.studentAuthUid) {
-        batch.delete(doc(firebaseDb, "users", student.studentAuthUid));
+        batch.delete(sdk.doc(firebaseDb, "users", student.studentAuthUid));
       }
 
       await batch.commit();
@@ -326,7 +316,8 @@ function createLocalBackend() {
 }
 
 async function loadFirebaseSession(authUser) {
-  const userDoc = await getDoc(doc(firebaseDb, "users", authUser.uid));
+  const sdk = await initFirebaseSdk();
+  const userDoc = await sdk.getDoc(sdk.doc(firebaseDb, "users", authUser.uid));
   const profile = userDoc.exists() ? userDoc.data() : {};
   return {
     uid: authUser.uid,
@@ -339,7 +330,8 @@ async function loadFirebaseSession(authUser) {
 }
 
 async function resolveFirebaseStudentByAccessCode(accessCode) {
-  const snapshot = await getDocs(query(collectionGroup(firebaseDb, "students"), where("accessCode", "==", accessCode)));
+  const sdk = await initFirebaseSdk();
+  const snapshot = await sdk.getDocs(sdk.query(sdk.collectionGroup(firebaseDb, "students"), sdk.where("accessCode", "==", accessCode)));
   const match = snapshot.docs[0];
   if (!match) return null;
   return {
@@ -350,11 +342,12 @@ async function resolveFirebaseStudentByAccessCode(accessCode) {
 }
 
 async function loadTeacherData(teacherId) {
+  const sdk = await initFirebaseSdk();
   const sections = ["students", "transactions", "lessons", "homeworks"];
   const result = emptyData();
   await Promise.all(
     sections.map(async (section) => {
-      const snapshot = await getDocs(collection(firebaseDb, "users", teacherId, section));
+      const snapshot = await sdk.getDocs(sdk.collection(firebaseDb, "users", teacherId, section));
       result[section] = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
     })
   );
@@ -367,12 +360,17 @@ async function loadStudentData(teacherId, studentId) {
 }
 
 function subscribeTeacherData(teacherId, onData, onError) {
+  if (!firebaseSdk) {
+    initFirebaseSdk().then(() => subscribeTeacherData(teacherId, onData, onError));
+    return () => {};
+  }
   const targets = ["students", "transactions", "lessons", "homeworks"];
   const store = emptyData();
+  const sdk = firebaseSdk;
 
   const unsubscribers = targets.map((key) =>
-    onSnapshot(
-      collection(firebaseDb, "users", teacherId, key),
+    sdk.onSnapshot(
+      sdk.collection(firebaseDb, "users", teacherId, key),
       (snapshot) => {
         store[key] = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
         onData({ ...store, students: [...store.students], transactions: [...store.transactions], lessons: [...store.lessons], homeworks: [...store.homeworks] });
@@ -402,22 +400,24 @@ function filterStudentData(data, studentId) {
 }
 
 async function replaceTeacherData(uid, data) {
+  const sdk = await initFirebaseSdk();
   const sections = ["students", "transactions", "lessons", "homeworks"];
-  const batch = writeBatch(firebaseDb);
+  const batch = sdk.writeBatch(firebaseDb);
   for (const section of sections) {
-    const snapshot = await getDocs(collection(firebaseDb, "users", uid, section));
+    const snapshot = await sdk.getDocs(sdk.collection(firebaseDb, "users", uid, section));
     snapshot.forEach((item) => batch.delete(item.ref));
   }
   await batch.commit();
   for (const section of sections) {
     for (const item of data[section]) {
-      await setDoc(doc(collection(firebaseDb, "users", uid, section), item.id), item);
+      await sdk.setDoc(sdk.doc(sdk.collection(firebaseDb, "users", uid, section), item.id), item);
     }
   }
 }
 
 async function loadDocData(ref) {
-  return (await getDoc(ref)).data();
+  const sdk = await initFirebaseSdk();
+  return (await sdk.getDoc(ref)).data();
 }
 
 function sanitizeStudent(student) {
@@ -658,4 +658,25 @@ function isFirebaseConfigured(config) {
       config.projectId &&
       !config.projectId.startsWith("PASTE_")
   );
+}
+
+async function initFirebaseSdk() {
+  if (firebaseSdk) return firebaseSdk;
+
+  const [appModule, authModule, firestoreModule] = await Promise.all([
+    import("https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js"),
+    import("https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js"),
+    import("https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js")
+  ]);
+
+  firebaseSdk = {
+    ...authModule,
+    ...firestoreModule
+  };
+
+  const app = appModule.initializeApp(firebaseWebConfig);
+  firebaseAuth = authModule.getAuth(app);
+  firebaseDb = firestoreModule.getFirestore(app);
+
+  return firebaseSdk;
 }
