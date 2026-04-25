@@ -719,9 +719,7 @@ function renderCabinetView() {
         <div>
           <p class="eyebrow">Личный кабинет ученика</p>
           <h2 class="hero-title">${escapeHtml(student.name)}</h2>
-          <p class="hero-copy">
-            Здесь ученик видит ближайшие уроки, домашние задания и комментарии преподавателя.
-          </p>
+          <p class="hero-copy">Здесь ученик видит ближайшие уроки, домашние задания и комментарии преподавателя.</p>
         </div>
         <div class="inline-actions">
           <button class="ghost-btn" id="cabinetBackBtn">К кабинетам</button>
@@ -732,9 +730,9 @@ function renderCabinetView() {
 
     <section class="metrics-grid">
       ${metricCard("Остаток уроков", student.lessonsLeft, "Оплаченные занятия")}
-      ${metricCard("Баланс", formatMoney(student.balance), "Текущий доступный остаток")}
-      ${metricCard("Прогресс ДЗ", `${stats.averageProgress}%`, "Средний прогресс по заданиям")}
-      ${metricCard("Следующий урок", stats.nextLesson || "Нет", "Ближайшая запись в расписании")}
+      ${metricCard("Баланс", formatMoney(student.balance), "Текущий остаток")}
+      ${metricCard("Прогресс ДЗ", `${stats.averageProgress}%`, "Средний прогресс")}
+      ${metricCard("Следующий урок", stats.nextLesson || "Нет", "Ближайшая запись")}
     </section>
 
     <section class="portal-layout">

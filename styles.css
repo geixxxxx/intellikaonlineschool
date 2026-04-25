@@ -122,7 +122,6 @@ button {
   color: var(--danger);
 }
 
-
 .panel--center {
   min-height: 280px;
   display: grid;
