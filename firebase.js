@@ -2,6 +2,7 @@ import { firebaseWebConfig } from "./firebase-config.js";
 import { deleteApp, initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   getAuth,
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -730,9 +731,11 @@ async function createFirebaseStudentAccount(tutorId, studentId, credentials, stu
 
   const secondaryApp = initializeApp(firebaseWebConfig, `student-account-${Date.now()}`);
   const secondaryAuth = getAuth(secondaryApp);
+  let createdUser = null;
 
   try {
     const credential = await createUserWithEmailAndPassword(secondaryAuth, credentials.email, credentials.password);
+    createdUser = credential.user;
     await updateProfile(credential.user, { displayName: credentials.displayName || student.name || "" });
 
     await setDoc(
@@ -757,6 +760,13 @@ async function createFirebaseStudentAccount(tutorId, studentId, credentials, stu
     });
 
     return credential.user.uid;
+  } catch (error) {
+    if (createdUser) {
+      try {
+        await deleteUser(createdUser);
+      } catch {}
+    }
+    throw error;
   } finally {
     try {
       await signOut(secondaryAuth);

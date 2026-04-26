@@ -11,6 +11,7 @@ const state = {
   search: "",
   homeworkFilter: "all",
   authMode: "login",
+  publicView: "landing",
   notice: "",
   unsubscribeData: null,
   profileTab: "lessons",
@@ -92,6 +93,7 @@ function init() {
       state.data = emptyData();
       state.selectedStudentId = null;
       state.currentView = "dashboard";
+      state.publicView = "landing";
       state.loadingData = false;
       render();
       return;
@@ -166,7 +168,7 @@ function render() {
   }
 
   if (!state.user) {
-    renderAuthScreen();
+    renderPublicScreen();
     return;
   }
 
@@ -319,6 +321,114 @@ function renderSplash() {
   `;
 }
 
+function renderPublicScreen() {
+  if (state.publicView === "auth") {
+    renderAuthScreen();
+    return;
+  }
+  renderLandingScreen();
+}
+
+function renderLandingScreen() {
+  authMount.innerHTML = `
+    <section class="landing-shell">
+      <div class="landing-hero">
+        <div class="landing-copy">
+          <div class="landing-brandline">
+            <div class="brand-mark">IN</div>
+            <div>
+              <p class="eyebrow">Платформа репетитора</p>
+              <h1 class="landing-title">Intellika</h1>
+            </div>
+          </div>
+          <p class="landing-kicker">Личный кабинет репетитора, отдельные кабинеты учеников и весь учебный процесс в одном месте.</p>
+          <p class="hero-copy">
+            Управляй учениками, расписанием, домашними заданиями, фото к ДЗ и VK-видео, а ученикам показывай только то, что им действительно нужно: задания, календарь и ближайшие занятия.
+          </p>
+          <div class="landing-actions">
+            <button class="primary-btn" id="landingRegisterBtn">Зарегистрироваться</button>
+            <button class="ghost-btn" id="landingLoginBtn">Войти</button>
+          </div>
+          <div class="landing-statline">
+            <span class="badge">Кабинет репетитора</span>
+            <span class="badge">Кабинет ученика</span>
+            <span class="badge">VK-видео</span>
+            <span class="badge">ДЗ с фото</span>
+          </div>
+        </div>
+
+        <div class="landing-preview">
+          <article class="landing-browser">
+            <div class="landing-browser-bar">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="landing-browser-grid">
+              <div class="landing-sidebar-preview">
+                <div class="landing-sidebar-mark">IN</div>
+                <div class="landing-sidebar-pill is-active"></div>
+                <div class="landing-sidebar-pill"></div>
+                <div class="landing-sidebar-pill"></div>
+                <div class="landing-sidebar-pill"></div>
+              </div>
+              <div class="landing-screen-preview">
+                <div class="landing-screen-hero">
+                  <div>
+                    <p class="eyebrow">Intellika</p>
+                    <h3>Разделенный доступ для репетитора и ученика</h3>
+                  </div>
+                  <div class="landing-screen-tag">Live</div>
+                </div>
+                <div class="landing-screen-cards">
+                  <article class="landing-mini-card">
+                    <strong>Ученики</strong>
+                    <span>CRM, кабинеты и статусы</span>
+                  </article>
+                  <article class="landing-mini-card">
+                    <strong>Домашка</strong>
+                    <span>Фото, комментарии и прогресс</span>
+                  </article>
+                  <article class="landing-mini-card">
+                    <strong>Календарь</strong>
+                    <span>Ближайшие занятия и обзор недели</span>
+                  </article>
+                  <article class="landing-mini-card">
+                    <strong>VK-видео</strong>
+                    <span>Общие и персональные материалы</span>
+                  </article>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <section class="landing-band">
+        <article class="landing-feature">
+          <p class="eyebrow">Для репетитора</p>
+          <h3>Вся база и контроль доступа</h3>
+          <p>Добавляй учеников, выдавай им отдельный вход, назначай уроки, домашние задания и видео.</p>
+        </article>
+        <article class="landing-feature">
+          <p class="eyebrow">Для ученика</p>
+          <h3>Только нужные разделы</h3>
+          <p>Ученик видит только свои задания, календарь, ближайшие занятия и материалы от репетитора.</p>
+        </article>
+        <article class="landing-feature">
+          <p class="eyebrow">Для учебного процесса</p>
+          <h3>Фото к ДЗ и видео из VK</h3>
+          <p>Загружай фотографии домашних заданий и встраивай VK-видео прямо в платформу без лишних ссылок.</p>
+        </article>
+      </section>
+    </section>
+  `;
+
+  authMount.classList.remove("hidden");
+  appShell.classList.add("hidden");
+
+  document.getElementById("landingRegisterBtn")?.addEventListener("click", () => openPublicAuth("register"));
+  document.getElementById("landingLoginBtn")?.addEventListener("click", () => openPublicAuth("login"));
+}
+
 function renderAuthScreen() {
   authMount.innerHTML = `
     <section class="auth-card">
@@ -340,6 +450,9 @@ function renderAuthScreen() {
       </div>
 
       <div class="auth-panel">
+        <div class="inline-actions">
+          <button class="ghost-btn" type="button" id="backToLandingBtn">На лендинг</button>
+        </div>
         <div class="pill-tabs">
           <button class="tag-btn ${state.authMode === "login" ? "is-selected" : ""}" data-auth-mode="login">Вход</button>
           <button class="tag-btn ${state.authMode === "register" ? "is-selected" : ""}" data-auth-mode="register">Регистрация репетитора</button>
@@ -367,8 +480,8 @@ function renderAuthScreen() {
             </label>
           ` : `
             <div class="auth-note auth-note--compact">
-              <strong>Ученикам регистрация не нужна</strong>
-              <p>Репетитор создает доступ в карточке ученика, а ученик затем входит по email и паролю.</p>
+              <strong>Ученики входят через эту же форму</strong>
+              <p>Репетитор создает ученику email и пароль в своем кабинете, а ученик затем входит здесь через кнопку «Вход».</p>
             </div>
           `}
           ${state.notice ? `<div class="auth-alert">${escapeHtml(state.notice)}</div>` : ""}
@@ -391,7 +504,20 @@ function renderAuthScreen() {
     });
   });
 
+  document.getElementById("backToLandingBtn")?.addEventListener("click", () => {
+    state.publicView = "landing";
+    state.notice = "";
+    render();
+  });
+
   document.getElementById("authForm")?.addEventListener("submit", handleAuthSubmit);
+}
+
+function openPublicAuth(mode) {
+  state.publicView = "auth";
+  state.authMode = mode;
+  state.notice = "";
+  render();
 }
 
 async function handleAuthSubmit(event) {
