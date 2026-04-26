@@ -1,9 +1,9 @@
 import { firebaseWebConfig } from "./firebase-config.js";
-import { deleteApp, initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
 import {
   createUserWithEmailAndPassword,
-  deleteUser,
   getAuth,
+  getIdToken,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
@@ -101,7 +101,7 @@ function createFirebaseBackend() {
     async createStudentAccount(user, studentId, credentials, studentSeed = null) {
       const account = await loadFirebaseSession(user);
       requireTutorAccount(account);
-      return createFirebaseStudentAccount(account.tutorId, studentId, credentials, studentSeed);
+      return createFirebaseStudentAccount(user, account.tutorId, studentId, credentials, studentSeed);
     },
     async savePayment(user, payment) {
       const account = await loadFirebaseSession(user);
@@ -718,7 +718,7 @@ function subscribeFirebaseStudentData(account, onData, onError) {
   };
 }
 
-async function createFirebaseStudentAccount(tutorId, studentId, credentials, studentSeed = null) {
+async function createFirebaseStudentAccount(user, tutorId, studentId, credentials, studentSeed = null) {
   const studentRef = doc(firebaseDb, "users", tutorId, "students", studentId);
   const student = studentSeed || await loadStudent(studentRef);
 
@@ -729,17 +729,92 @@ async function createFirebaseStudentAccount(tutorId, studentId, credentials, stu
     throw new Error("Для этого ученика кабинет уже создан.");
   }
 
-  const secondaryApp = initializeApp(firebaseWebConfig, `student-account-${Date.now()}`);
-  const secondaryAuth = getAuth(secondaryApp);
-  let createdUser = null;
+  try {
+    return await createFirebaseStudentAccountViaProxy(user, tutorId, studentId, credentials, student);
+  } catch (error) {
+    if (!canFallbackToDirectProvision(error)) {
+      throw error;
+    }
+  }
+
+  return createFirebaseStudentAccountDirect(tutorId, studentId, credentials, studentRef, student);
+}
+
+async function createFirebaseStudentAccountViaProxy(user, tutorId, studentId, credentials, student) {
+  const idToken = await getIdToken(user, true);
+  let response = null;
 
   try {
-    const credential = await createUserWithEmailAndPassword(secondaryAuth, credentials.email, credentials.password);
-    createdUser = credential.user;
-    await updateProfile(credential.user, { displayName: credentials.displayName || student.name || "" });
+    response = await fetch("/api/firebase/student-account", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        idToken,
+        tutorId,
+        studentId,
+        credentials: {
+          email: credentials.email,
+          password: credentials.password,
+          displayName: credentials.displayName || student.name || ""
+        },
+        student: {
+          name: student.name || credentials.displayName || ""
+        },
+        firebase: {
+          apiKey: firebaseWebConfig?.apiKey || "",
+          projectId: firebaseWebConfig?.projectId || ""
+        }
+      })
+    });
+  } catch (error) {
+    error.code = "student-account/proxy-unavailable";
+    throw error;
+  }
+
+  const result = await response.json().catch(() => ({}));
+  if (response.ok && result?.uid) {
+    return result.uid;
+  }
+
+  throw mapProxyProvisionError(result, response.status);
+}
+
+function canFallbackToDirectProvision(error) {
+  const code = String(error?.code || "").toLowerCase();
+  return code === "student-account/proxy-unavailable"
+    || code === "student-account/proxy-http-error"
+    || code === "student-account/proxy-empty-response";
+}
+
+function mapProxyProvisionError(result, status) {
+  const error = new Error(result?.message || "Не удалось создать аккаунт ученика через локальный сервер.");
+  error.code = result?.code || (status ? "student-account/proxy-http-error" : "student-account/proxy-unavailable");
+  return error;
+}
+
+async function createFirebaseStudentAccountDirect(tutorId, studentId, credentials, studentRef, student) {
+  
+  let signupResult = null;
+
+  try {
+    signupResult = await identityToolkitRequest("accounts:signUp", {
+      email: credentials.email,
+      password: credentials.password,
+      returnSecureToken: true
+    });
+
+    if (credentials.displayName || student.name) {
+      await identityToolkitRequest("accounts:update", {
+        idToken: signupResult.idToken,
+        displayName: credentials.displayName || student.name || "",
+        returnSecureToken: true
+      });
+    }
 
     await setDoc(
-      doc(firebaseDb, "users", credential.user.uid),
+      doc(firebaseDb, "users", signupResult.localId),
       {
         role: "student",
         tutorId,
@@ -754,24 +829,21 @@ async function createFirebaseStudentAccount(tutorId, studentId, credentials, stu
 
     await updateDoc(studentRef, {
       email: credentials.email,
-      accountUid: credential.user.uid,
+      accountUid: signupResult.localId,
       hasPortalAccess: true,
       accountCreatedAt: new Date().toISOString()
     });
 
-    return credential.user.uid;
+    return signupResult.localId;
   } catch (error) {
-    if (createdUser) {
+    if (signupResult?.idToken) {
       try {
-        await deleteUser(createdUser);
+        await identityToolkitRequest("accounts:delete", {
+          idToken: signupResult.idToken
+        });
       } catch {}
     }
     throw error;
-  } finally {
-    try {
-      await signOut(secondaryAuth);
-    } catch {}
-    await deleteApp(secondaryApp);
   }
 }
 
@@ -840,6 +912,61 @@ function isOfflineFirestoreError(error) {
     || code.includes("offline")
     || message.includes("client is offline")
     || message.includes("offline");
+}
+
+async function identityToolkitRequest(endpoint, payload) {
+  const apiKey = firebaseWebConfig?.apiKey;
+  if (!apiKey) {
+    throw new Error("В firebase-config.js отсутствует apiKey для создания ученического аккаунта.");
+  }
+
+  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/${endpoint}?key=${apiKey}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (response.ok) {
+    return result;
+  }
+
+  throw mapIdentityToolkitError(result?.error?.message || "AUTH_REQUEST_FAILED");
+}
+
+function mapIdentityToolkitError(code) {
+  const normalized = String(code || "").toUpperCase();
+  const error = new Error(normalized);
+
+  if (normalized.includes("EMAIL_EXISTS")) {
+    error.code = "auth/email-already-in-use";
+    error.message = "Этот email уже используется другим аккаунтом.";
+    return error;
+  }
+
+  if (normalized.includes("WEAK_PASSWORD")) {
+    error.code = "auth/weak-password";
+    error.message = "Пароль слишком слабый. Минимум 6 символов.";
+    return error;
+  }
+
+  if (normalized.includes("INVALID_EMAIL")) {
+    error.code = "auth/invalid-email";
+    error.message = "Укажи корректный email.";
+    return error;
+  }
+
+  if (normalized.includes("OPERATION_NOT_ALLOWED")) {
+    error.code = "auth/operation-not-allowed";
+    error.message = "В Firebase выключен вход по email/password. Включи его в Authentication -> Sign-in method.";
+    return error;
+  }
+
+  error.code = "auth/identity-toolkit-error";
+  error.message = normalized;
+  return error;
 }
 
 function normalizeLocalAccount(user) {

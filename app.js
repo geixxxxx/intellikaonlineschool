@@ -1,5 +1,9 @@
 import { backend } from "./firebase.js";
 
+const ASSISTANT_STORAGE_KEY = "intellika-assistant-v1";
+const ASSISTANT_DEFAULT_MODEL = "gpt-4o-mini";
+const ASSISTANT_HISTORY_LIMIT = 12;
+
 const state = {
   authReady: false,
   user: null,
@@ -12,6 +16,10 @@ const state = {
   homeworkFilter: "all",
   authMode: "login",
   publicView: "landing",
+  assistantMessages: [],
+  assistantBusy: false,
+  assistantDraft: "",
+  assistantConfig: loadAssistantConfig(),
   notice: "",
   unsubscribeData: null,
   profileTab: "lessons",
@@ -91,6 +99,9 @@ function init() {
     if (!user) {
       state.account = null;
       state.data = emptyData();
+      state.assistantMessages = [];
+      state.assistantBusy = false;
+      state.assistantDraft = "";
       state.selectedStudentId = null;
       state.currentView = "dashboard";
       state.publicView = "landing";
@@ -119,6 +130,7 @@ async function bootUserSession() {
       return;
     }
     state.selectedStudentId = isStudent() ? state.account.studentId : null;
+    state.assistantMessages = loadAssistantMessages();
     state.currentView = "dashboard";
     if (state.account?.disabled) {
       state.data = emptyData();
@@ -228,6 +240,12 @@ function renderTutorViews() {
     return;
   }
 
+  if (state.currentView === "assistant") {
+    appView.innerHTML = renderAssistantView();
+    bindAssistantView();
+    return;
+  }
+
   if (state.currentView === "cabinet" && state.selectedStudentId) {
     appView.innerHTML = renderCabinetView();
     bindCabinetView();
@@ -267,6 +285,12 @@ function renderStudentViews() {
   if (state.currentView === "videos") {
     appView.innerHTML = renderVideosView();
     bindVideosView();
+    return;
+  }
+
+  if (state.currentView === "assistant") {
+    appView.innerHTML = renderAssistantView();
+    bindAssistantView();
     return;
   }
 
@@ -341,9 +365,9 @@ function renderLandingScreen() {
               <h1 class="landing-title">Intellika</h1>
             </div>
           </div>
-          <p class="landing-kicker">Личный кабинет репетитора, отдельные кабинеты учеников и весь учебный процесс в одном месте.</p>
+          <p class="landing-kicker">Платформа для репетитора с CRM учеников, личными кабинетами, календарем, домашками, VK-видео и AI-ассистентом.</p>
           <p class="hero-copy">
-            Управляй учениками, расписанием, домашними заданиями, фото к ДЗ и VK-видео, а ученикам показывай только то, что им действительно нужно: задания, календарь и ближайшие занятия.
+            Управляй учениками, расписанием, домашними заданиями, фото к ДЗ, VK-видео и нейросетью, а ученикам показывай только то, что им действительно нужно: задания, календарь, видео и ближайшие занятия.
           </p>
           <div class="landing-actions">
             <button class="primary-btn" id="landingRegisterBtn">Зарегистрироваться</button>
@@ -354,6 +378,7 @@ function renderLandingScreen() {
             <span class="badge">Кабинет ученика</span>
             <span class="badge">VK-видео</span>
             <span class="badge">ДЗ с фото</span>
+            <span class="badge">AI-ассистент</span>
           </div>
         </div>
 
@@ -395,6 +420,10 @@ function renderLandingScreen() {
                     <strong>VK-видео</strong>
                     <span>Общие и персональные материалы</span>
                   </article>
+                  <article class="landing-mini-card">
+                    <strong>AI-ассистент</strong>
+                    <span>Помощник для репетитора и ученика</span>
+                  </article>
                 </div>
               </div>
             </div>
@@ -406,7 +435,7 @@ function renderLandingScreen() {
         <article class="landing-feature">
           <p class="eyebrow">Для репетитора</p>
           <h3>Вся база и контроль доступа</h3>
-          <p>Добавляй учеников, выдавай им отдельный вход, назначай уроки, домашние задания и видео.</p>
+          <p>Добавляй учеников, выдавай им отдельный вход, назначай уроки, домашние задания, фото и видео без лишних сервисов.</p>
         </article>
         <article class="landing-feature">
           <p class="eyebrow">Для ученика</p>
@@ -418,6 +447,46 @@ function renderLandingScreen() {
           <h3>Фото к ДЗ и видео из VK</h3>
           <p>Загружай фотографии домашних заданий и встраивай VK-видео прямо в платформу без лишних ссылок.</p>
         </article>
+        <article class="landing-feature">
+          <p class="eyebrow">Для темпа работы</p>
+          <h3>AI внутри платформы</h3>
+          <p>Репетитор может быстро собирать планы уроков и ДЗ, а ученик — разбирать темы, ошибки и подготовку к занятию.</p>
+        </article>
+      </section>
+
+      <section class="landing-proof">
+        <article class="landing-proof-card">
+          <p class="eyebrow">Что получает репетитор</p>
+          <h3>Одна система вместо заметок, таблиц и пересылки ссылок по мессенджерам</h3>
+          <div class="landing-proof-grid">
+            <div class="landing-proof-item">
+              <strong>База учеников</strong>
+              <span>Карточки, баланс, уроки, цели и статусы доступа.</span>
+            </div>
+            <div class="landing-proof-item">
+              <strong>Проверка ДЗ</strong>
+              <span>Очередь работ, фото вложения и контроль прогресса.</span>
+            </div>
+            <div class="landing-proof-item">
+              <strong>Календарь</strong>
+              <span>План недели и видимость ближайших занятий для ученика.</span>
+            </div>
+            <div class="landing-proof-item">
+              <strong>AI-ассистент</strong>
+              <span>Подсказки по объяснениям, планам уроков и разбору ошибок.</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="landing-cta-band">
+          <p class="eyebrow">Готово к запуску</p>
+          <h3>Сначала заходишь как репетитор, потом создаешь отдельные входы ученикам прямо внутри платформы.</h3>
+          <p class="hero-copy">Кнопки ниже сразу переводят на регистрацию и вход в рабочую часть Intellika.</p>
+          <div class="landing-actions">
+            <button class="primary-btn" id="landingRegisterBtnBottom">Создать кабинет</button>
+            <button class="ghost-btn" id="landingLoginBtnBottom">У меня уже есть вход</button>
+          </div>
+        </article>
       </section>
     </section>
   `;
@@ -427,6 +496,8 @@ function renderLandingScreen() {
 
   document.getElementById("landingRegisterBtn")?.addEventListener("click", () => openPublicAuth("register"));
   document.getElementById("landingLoginBtn")?.addEventListener("click", () => openPublicAuth("login"));
+  document.getElementById("landingRegisterBtnBottom")?.addEventListener("click", () => openPublicAuth("register"));
+  document.getElementById("landingLoginBtnBottom")?.addEventListener("click", () => openPublicAuth("login"));
 }
 
 function renderAuthScreen() {
@@ -987,6 +1058,156 @@ function renderVideosView() {
   `;
 }
 
+function renderAssistantView() {
+  const prompts = getAssistantPromptTemplates();
+  const summaryCards = getAssistantSummaryCards();
+  const hasApiKey = Boolean(state.assistantConfig.apiKey);
+  const roleTitle = isStudent() ? "Нейросеть ученика" : "Нейросеть репетитора";
+  const roleSubtitle = isStudent()
+    ? "Помогает разобрать тему, подготовиться к следующему занятию и пройтись по домашнему заданию."
+    : "Помогает собирать планы уроков, формулировать домашние задания, объяснения и сообщения ученикам.";
+
+  return `
+    ${renderNoticeBanner()}
+    <section class="assistant-shell">
+      <div class="assistant-grid">
+        <article class="panel assistant-panel assistant-panel--chat">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">AI-ассистент</p>
+              <h2 class="section-title">${roleTitle}</h2>
+              <p class="section-subtitle">${roleSubtitle}</p>
+            </div>
+            <div class="stat-row">
+              <span class="badge ${hasApiKey ? "is-success" : ""}">${hasApiKey ? "Ключ подключен" : "Нужен API key"}</span>
+              <span class="badge">${escapeHtml(state.assistantConfig.model || ASSISTANT_DEFAULT_MODEL)}</span>
+            </div>
+          </div>
+
+          <div class="assistant-prompt-list">
+            ${prompts.map((item) => `
+              <button type="button" class="tag-btn" data-assistant-prompt="${escapeHtml(item.prompt)}">${escapeHtml(item.label)}</button>
+            `).join("")}
+          </div>
+
+          <div class="assistant-thread" id="assistantThread">
+            ${state.assistantMessages.length
+              ? state.assistantMessages.map(renderAssistantMessage).join("")
+              : renderAssistantEmptyState(prompts)
+            }
+            ${state.assistantBusy ? `
+              <article class="assistant-message">
+                <div class="assistant-message-meta">AI-ассистент</div>
+                <div class="assistant-bubble assistant-bubble--assistant">Готовлю ответ...</div>
+              </article>
+            ` : ""}
+          </div>
+
+          <form class="assistant-compose" id="assistantForm">
+            <label class="assistant-compose-box">
+              <span class="eyebrow">Запрос</span>
+              <textarea
+                id="assistantPromptInput"
+                name="prompt"
+                class="assistant-textarea"
+                rows="5"
+                placeholder="${isStudent()
+                  ? "Например: объясни тему простыми словами и дай план подготовки к следующему занятию"
+                  : "Например: составь план урока и домашнее задание для выбранного ученика"}"
+                ${state.assistantBusy ? "disabled" : ""}
+              >${escapeHtml(state.assistantDraft)}</textarea>
+            </label>
+            <div class="assistant-compose-actions">
+              <span class="field-note">Ctrl/Cmd + Enter отправляет запрос.</span>
+              <button type="submit" class="primary-btn" ${state.assistantBusy ? "disabled" : ""}>
+                ${state.assistantBusy ? "Думаю..." : "Спросить нейросеть"}
+              </button>
+            </div>
+          </form>
+        </article>
+
+        <aside class="assistant-sidebar">
+          <article class="panel assistant-panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Подключение</p>
+                <h3 class="section-title">Настройка AI</h3>
+              </div>
+            </div>
+            <form class="modal-form assistant-config-form" id="assistantConfigForm">
+              <label class="full-width">
+                <span>OpenAI API key</span>
+                <input name="apiKey" type="password" autocomplete="off" placeholder="sk-..." value="${escapeHtml(state.assistantConfig.apiKey || "")}" />
+              </label>
+              <label class="full-width">
+                <span>Модель</span>
+                <input name="model" placeholder="${ASSISTANT_DEFAULT_MODEL}" value="${escapeHtml(state.assistantConfig.model || ASSISTANT_DEFAULT_MODEL)}" />
+              </label>
+              <div class="modal-actions assistant-config-actions">
+                <button type="submit" class="ghost-btn">Сохранить</button>
+                <button type="button" class="ghost-btn" id="assistantClearChatBtn">Очистить чат</button>
+              </div>
+            </form>
+            <p class="field-note">Ключ хранится только в этом браузере и используется локальным прокси на этом сайте.</p>
+          </article>
+
+          <article class="panel assistant-panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Контекст</p>
+                <h3 class="section-title">Что нейросеть видит сейчас</h3>
+              </div>
+            </div>
+            <div class="assistant-kpi-grid">
+              ${summaryCards.map((item) => `
+                <article class="assistant-kpi">
+                  <span>${escapeHtml(item.label)}</span>
+                  <strong>${escapeHtml(String(item.value))}</strong>
+                  <small>${escapeHtml(item.note)}</small>
+                </article>
+              `).join("")}
+            </div>
+            <div class="assistant-context-note">
+              ${escapeHtml(buildAssistantContextPreview())}
+            </div>
+          </article>
+        </aside>
+      </div>
+    </section>
+  `;
+}
+
+function renderAssistantEmptyState(prompts) {
+  return `
+    <article class="assistant-empty">
+      <p class="eyebrow">Готов к работе</p>
+      <h3>Этот раздел можно использовать прямо внутри платформы.</h3>
+      <p class="muted-copy">${isStudent()
+        ? "Попроси объяснить тему, разобрать домашку, подготовить тебя к следующему занятию или сделать мини-тест."
+        : "Попроси составить план урока, придумать домашку, объяснение темы, разбор ошибок или сообщение ученику."}</p>
+      <div class="assistant-empty-prompts">
+        ${prompts.map((item) => `<span class="badge">${escapeHtml(item.label)}</span>`).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderAssistantMessage(message) {
+  const isUserMessage = message.role === "user";
+  const authorLabel = isUserMessage
+    ? (isStudent() ? "Ученик" : "Репетитор")
+    : "AI-ассистент";
+
+  return `
+    <article class="assistant-message${isUserMessage ? " assistant-message--user" : ""}">
+      <div class="assistant-message-meta">${authorLabel}</div>
+      <div class="assistant-bubble ${isUserMessage ? "assistant-bubble--user" : "assistant-bubble--assistant"}">
+        ${formatRichText(message.content)}
+      </div>
+    </article>
+  `;
+}
+
 function renderPortalsView() {
   const students = filteredStudents();
 
@@ -1480,6 +1701,57 @@ function bindVideosView() {
   appView.querySelectorAll("[data-edit-video]").forEach((button) => {
     button.addEventListener("click", () => openVideoModal(button.dataset.editVideo));
   });
+}
+
+function bindAssistantView() {
+  const assistantThread = document.getElementById("assistantThread");
+  const promptInput = document.getElementById("assistantPromptInput");
+
+  appView.querySelectorAll("[data-assistant-prompt]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.assistantDraft = button.dataset.assistantPrompt || "";
+      if (promptInput) {
+        promptInput.value = state.assistantDraft;
+        promptInput.focus();
+        promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+      }
+    });
+  });
+
+  promptInput?.addEventListener("input", (event) => {
+    state.assistantDraft = event.target.value;
+  });
+
+  promptInput?.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      document.getElementById("assistantForm")?.requestSubmit();
+    }
+  });
+
+  document.getElementById("assistantForm")?.addEventListener("submit", handleAssistantSubmit);
+  document.getElementById("assistantConfigForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    saveAssistantConfig({
+      apiKey: String(formData.get("apiKey") || "").trim(),
+      model: String(formData.get("model") || "").trim() || ASSISTANT_DEFAULT_MODEL
+    });
+    showToast("Настройки нейросети сохранены", "success");
+    render();
+  });
+  document.getElementById("assistantClearChatBtn")?.addEventListener("click", () => {
+    state.assistantMessages = [];
+    saveAssistantMessages();
+    showToast("История AI-чата очищена", "success");
+    render();
+  });
+
+  if (assistantThread) {
+    requestAnimationFrame(() => {
+      assistantThread.scrollTop = assistantThread.scrollHeight;
+    });
+  }
 }
 
 function bindPortalsView() {
@@ -1985,6 +2257,76 @@ toastStyle.textContent = `
 `;
 document.head.appendChild(toastStyle);
 
+async function handleAssistantSubmit(event) {
+  event.preventDefault();
+  if (state.assistantBusy) return;
+
+  const prompt = String(state.assistantDraft || "").trim();
+  if (!prompt) {
+    showToast("Напиши запрос для нейросети.", "error");
+    return;
+  }
+
+  state.assistantDraft = "";
+  state.assistantBusy = true;
+  state.assistantMessages = trimAssistantMessages([
+    ...state.assistantMessages,
+    {
+      role: "user",
+      content: prompt,
+      createdAt: new Date().toISOString()
+    }
+  ]);
+  saveAssistantMessages();
+  render();
+
+  try {
+    const reply = await requestAssistantReply();
+    state.assistantMessages = trimAssistantMessages([
+      ...state.assistantMessages,
+      {
+        role: "assistant",
+        content: reply,
+        createdAt: new Date().toISOString()
+      }
+    ]);
+    saveAssistantMessages();
+  } catch (error) {
+    showToast(getErrorMessage(error), "error");
+  } finally {
+    state.assistantBusy = false;
+    render();
+  }
+}
+
+async function requestAssistantReply() {
+  const response = await fetch("/api/assistant", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      apiKey: state.assistantConfig.apiKey,
+      model: state.assistantConfig.model || ASSISTANT_DEFAULT_MODEL,
+      role: isStudent() ? "student" : "tutor",
+      context: buildAssistantContext(),
+      messages: trimAssistantMessages(state.assistantMessages).map((item) => ({
+        role: item.role,
+        content: item.content
+      }))
+    })
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (response.ok && result?.reply) {
+    return String(result.reply).trim();
+  }
+
+  const error = new Error(result?.message || "Нейросеть не смогла ответить.");
+  error.code = result?.code || "assistant/request-failed";
+  throw error;
+}
+
 function exportStudentsCsv() {
   const headers = ["Имя", "Предмет", "Ставка", "Баланс", "Уроков осталось", "Телефон", "Email входа", "Код кабинета"];
   const rows = state.data.students.map((student) => [
@@ -2310,8 +2652,189 @@ function upsertStudentInState(student) {
 
 function allowedViews() {
   return isStudent()
-    ? ["dashboard", "homework", "calendar", "videos"]
-    : ["dashboard", "students", "homework", "portals", "calendar", "videos", "profile", "cabinet"];
+    ? ["dashboard", "homework", "calendar", "videos", "assistant"]
+    : ["dashboard", "students", "homework", "portals", "calendar", "videos", "assistant", "profile", "cabinet"];
+}
+
+function loadAssistantConfig() {
+  try {
+    const raw = localStorage.getItem(`${ASSISTANT_STORAGE_KEY}:config`);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      apiKey: String(parsed?.apiKey || "").trim(),
+      model: String(parsed?.model || ASSISTANT_DEFAULT_MODEL).trim() || ASSISTANT_DEFAULT_MODEL
+    };
+  } catch {
+    return {
+      apiKey: "",
+      model: ASSISTANT_DEFAULT_MODEL
+    };
+  }
+}
+
+function saveAssistantConfig(nextConfig) {
+  state.assistantConfig = {
+    apiKey: String(nextConfig?.apiKey || "").trim(),
+    model: String(nextConfig?.model || ASSISTANT_DEFAULT_MODEL).trim() || ASSISTANT_DEFAULT_MODEL
+  };
+
+  try {
+    localStorage.setItem(`${ASSISTANT_STORAGE_KEY}:config`, JSON.stringify(state.assistantConfig));
+  } catch {}
+}
+
+function loadAssistantMessages() {
+  if (!state.user?.uid) return [];
+
+  try {
+    const raw = localStorage.getItem(assistantMessagesKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    return trimAssistantMessages(parsed);
+  } catch {
+    return [];
+  }
+}
+
+function saveAssistantMessages() {
+  if (!state.user?.uid) return;
+
+  try {
+    localStorage.setItem(assistantMessagesKey(), JSON.stringify(trimAssistantMessages(state.assistantMessages)));
+  } catch {}
+}
+
+function assistantMessagesKey() {
+  return `${ASSISTANT_STORAGE_KEY}:messages:${state.user?.uid || "guest"}`;
+}
+
+function trimAssistantMessages(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((item) => item && (item.role === "user" || item.role === "assistant") && String(item.content || "").trim())
+    .map((item) => ({
+      role: item.role,
+      content: String(item.content || "").trim().slice(0, 4000),
+      createdAt: item.createdAt || new Date().toISOString()
+    }))
+    .slice(-ASSISTANT_HISTORY_LIMIT);
+}
+
+function getAssistantPromptTemplates() {
+  return isStudent()
+    ? [
+        { label: "Объяснить тему", prompt: "Объясни тему из моей домашки простыми словами и дай короткий план, как ее повторить." },
+        { label: "Подготовка к уроку", prompt: "Помоги подготовиться к следующему занятию: что повторить, что спросить у репетитора и на чем сосредоточиться." },
+        { label: "Разбор ошибки", prompt: "Помоги разобрать типичную ошибку в решении и покажи, как ее замечать заранее." },
+        { label: "Мини-тест", prompt: "Сделай мини-тест на 5 вопросов по моей теме и потом проверь мои ответы." }
+      ]
+    : [
+        { label: "План урока", prompt: "Составь структуру следующего урока для выбранного ученика: цель, этапы урока, вопросы на проверку и домашнее задание." },
+        { label: "Домашнее задание", prompt: "Придумай домашнее задание по теме в трех уровнях сложности: база, уверенный уровень, усиленный уровень." },
+        { label: "Сообщение ученику", prompt: "Напиши короткое и понятное сообщение ученику по итогам урока: что получилось, что повторить и что сделать дома." },
+        { label: "Разбор ошибок", prompt: "Составь список типичных ошибок по теме и как их объяснить ученику без перегруза." }
+      ];
+}
+
+function getAssistantSummaryCards() {
+  if (isStudent()) {
+    const student = currentStudent();
+    const stats = student ? getStudentStats(student.id) : { nextLesson: "", homeworkOpen: 0, videoCount: 0, averageProgress: 0 };
+    return [
+      { label: "Следующий урок", value: stats.nextLesson || "Нет", note: "Ближайшее занятие" },
+      { label: "Открытые ДЗ", value: stats.homeworkOpen, note: "Нужно сделать" },
+      { label: "Видео", value: stats.videoCount, note: "Материалы от репетитора" },
+      { label: "Прогресс", value: `${stats.averageProgress}%`, note: "Средний прогресс" }
+    ];
+  }
+
+  const data = deriveTutorData();
+  const selected = selectedStudent();
+  return [
+    { label: "Ученики", value: data.students.length, note: "В текущей базе" },
+    { label: "На проверке", value: data.reviewQueue.length, note: "Активные ДЗ" },
+    { label: "Кабинеты", value: data.activePortals, note: "Выданные доступы" },
+    { label: "Фокус", value: selected?.name || "Весь аккаунт", note: selected ? selected.subject : "Общий контекст" }
+  ];
+}
+
+function buildAssistantContextPreview() {
+  if (isStudent()) {
+    const student = currentStudent();
+    if (!student) return "Профиль ученика пока не найден.";
+    const lessons = visibleLessons().slice(0, 3).map((item) => formatLessonDate(item.date, item.time)).join(" | ");
+    const homeworks = visibleHomeworks().slice(0, 3).map((item) => item.title).join(" | ");
+    return `Ученик ${student.name}. Предмет: ${student.subject}. Ближайшие уроки: ${lessons || "нет"}. Домашки: ${homeworks || "нет"}.`;
+  }
+
+  const selected = selectedStudent();
+  if (selected) {
+    const homeworks = state.data.homeworks.filter((item) => item.studentId === selected.id).slice(0, 3).map((item) => item.title).join(" | ");
+    const lessons = state.data.lessons.filter((item) => item.studentId === selected.id).slice(0, 3).map((item) => formatLessonDate(item.date, item.time)).join(" | ");
+    return `Выбран ученик ${selected.name} (${selected.subject}). Ближайшие уроки: ${lessons || "нет"}. Домашки: ${homeworks || "нет"}.`;
+  }
+
+  const upcoming = state.data.lessons.filter((item) => item.status === "planned").slice(0, 4).map((item) => {
+    const student = findStudent(item.studentId);
+    return `${student?.name || "Ученик"} — ${formatLessonDate(item.date, item.time)}`;
+  }).join(" | ");
+  return `Режим репетитора. Учеников: ${state.data.students.length}. Ближайшие занятия: ${upcoming || "нет"}.`;
+}
+
+function buildAssistantContext() {
+  if (isStudent()) {
+    const student = currentStudent();
+    const stats = student ? getStudentStats(student.id) : null;
+    const lessons = visibleLessons().slice(0, 5).map((item) => `- ${formatLessonDate(item.date, item.time)} • ${item.topic || "Без темы"} • ${lessonStatusLabel(item.status)}`).join("\n");
+    const homeworks = visibleHomeworks().slice(0, 5).map((item) => `- ${item.title} • ${homeworkStatusLabel(item.status)} • срок ${formatDate(item.dueDate)}`).join("\n");
+    const videos = visibleVideos().slice(0, 5).map((item) => `- ${item.title}`).join("\n");
+    return [
+      "Роль пользователя: ученик.",
+      `Имя ученика: ${student?.name || "Не найдено"}.`,
+      `Предмет: ${student?.subject || "Не указан"}.`,
+      `Цель: ${student?.goal || "Не указана"}.`,
+      `Следующий урок: ${stats?.nextLesson || "Нет"}.`,
+      `Открытые ДЗ: ${stats?.homeworkOpen ?? 0}.`,
+      "Ближайшие занятия:",
+      lessons || "- Нет занятий.",
+      "Домашние задания:",
+      homeworks || "- Нет заданий.",
+      "Видео от репетитора:",
+      videos || "- Нет видео."
+    ].join("\n");
+  }
+
+  const selected = selectedStudent();
+  const data = deriveTutorData();
+  const selectedHomeworks = selected
+    ? state.data.homeworks.filter((item) => item.studentId === selected.id).slice(0, 5)
+    : [];
+  const selectedLessons = selected
+    ? state.data.lessons.filter((item) => item.studentId === selected.id).slice(0, 5)
+    : [];
+
+  return [
+    "Роль пользователя: репетитор.",
+    `Всего учеников: ${data.students.length}.`,
+    `Активных кабинетов: ${data.activePortals}.`,
+    `Домашек на проверке: ${data.reviewQueue.length}.`,
+    `Плановых занятий на неделе: ${data.weekLessons}.`,
+    selected ? `Сейчас выбран ученик: ${selected.name} (${selected.subject}).` : "Сейчас нет выбранного ученика, контекст общий по аккаунту.",
+    selected ? `Цель ученика: ${selected.goal || "Не указана"}.` : "",
+    selected ? `Заметки по ученику: ${selected.notes || "Нет заметок."}.` : "",
+    selected ? "Последние занятия выбранного ученика:" : "Ближайшие занятия по аккаунту:",
+    (selected
+      ? selectedLessons.map((item) => `- ${formatLessonDate(item.date, item.time)} • ${item.topic || "Без темы"} • ${lessonStatusLabel(item.status)}`).join("\n")
+      : data.upcomingLessons.slice(0, 5).map((item) => {
+          const student = findStudent(item.studentId);
+          return `- ${student?.name || "Ученик"} • ${formatLessonDate(item.date, item.time)} • ${item.topic || "Без темы"}`;
+        }).join("\n")) || "- Нет занятий.",
+    selected ? "Домашние задания выбранного ученика:" : "Очередь домашних заданий:",
+    (selected
+      ? selectedHomeworks.map((item) => `- ${item.title} • ${homeworkStatusLabel(item.status)} • срок ${formatDate(item.dueDate)}`).join("\n")
+      : data.reviewQueue.slice(0, 5).map((item) => {
+          const student = findStudent(item.studentId);
+          return `- ${item.title} • ${student?.name || "Ученик"} • ${homeworkStatusLabel(item.status)}`;
+        }).join("\n")) || "- Нет домашних заданий."
+  ].filter(Boolean).join("\n");
 }
 
 function emptyData() {
@@ -2702,6 +3225,18 @@ function getErrorMessage(error) {
   }
   if (code.includes("auth/invalid-email")) return "Укажи корректный email.";
   if (code.includes("auth/weak-password")) return "Пароль слишком слабый. Минимум 6 символов.";
+  if (code.includes("auth/operation-not-allowed")) {
+    return "В Firebase выключен вход по email/password. Открой Authentication -> Sign-in method и включи Email/Password.";
+  }
+  if (code.includes("auth/too-many-requests")) {
+    return "Firebase временно ограничил количество попыток. Подожди немного и попробуй снова.";
+  }
+  if (code.includes("assistant/missing-api-key")) {
+    return "Добавь OpenAI API key в разделе «Нейросеть», чтобы AI-ассистент заработал.";
+  }
+  if (code.includes("assistant/upstream-error") || code.includes("assistant/request-failed")) {
+    return error?.message || "Нейросеть не смогла ответить на запрос.";
+  }
   if (code.includes("permission-denied")) {
     return "Firebase отклонил запрос. Проверь Firestore rules и снова опубликуй правила.";
   }
@@ -2724,4 +3259,8 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function formatRichText(value) {
+  return escapeHtml(value).replaceAll("\n", "<br />");
 }
