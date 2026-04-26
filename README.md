@@ -4,9 +4,11 @@ Intellika is a ready-to-publish JavaScript project for tutors. It includes:
 
 - dashboard with student and revenue overview
 - student CRM with profiles and balances
-- homework review board
-- student portals
+- homework review board with photo attachments
+- separate tutor and student кабинеты
+- student portals with personal login access
 - lesson calendar
+- VK video embeds for all students or for a specific student
 - email/password authentication
 - Cloud Firestore database support
 
@@ -36,6 +38,13 @@ The project supports two modes:
 - Firebase mode: uses registration, login and Cloud Firestore
 
 If `firebase-config.js` still contains placeholder values, the app runs in demo mode.
+
+### Roles after the update
+
+- Tutor account: full access to students, payments, lessons, homework, student cabinets and VK videos
+- Student account: access only to their own homework, calendar, planned lessons and assigned videos
+
+Student logins are created by the tutor inside the student profile card.
 
 ## Enable Firebase Auth and Firestore
 
@@ -77,7 +86,14 @@ Use [firestore.rules](/Users/yaromirtribunsky/Documents/Codex/2026-04-25/javascr
 
 `Firestore Database -> Rules`
 
-These rules isolate each tutor's data under their own `users/{uid}` path.
+These rules isolate each tutor's data under their own `users/{uid}` path and allow a student to read only:
+
+- their own student profile
+- their own lessons
+- their own homework
+- VK videos assigned to them or to all students
+
+After pulling this update, republish the rules in Firebase Console.
 
 ## Project structure
 
@@ -148,3 +164,4 @@ npm start
 
 - Without Firebase config, the app uses demo local storage.
 - With Firebase config, registration and login use Firebase Authentication and app data uses Cloud Firestore.
+- Homework photos are stored directly inside homework documents, so use a small number of compressed images per task.

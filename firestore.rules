@@ -1,11 +1,120 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function requesterDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function hasRequesterDoc() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function requesterRole() {
+      return hasRequesterDoc() ? requesterDoc().data.role : null;
+    }
+
+    function isTutorOwner(tutorId) {
+      return signedIn()
+        && request.auth.uid == tutorId
+        && requesterRole() == "tutor";
+    }
+
+    function isLinkedStudent(tutorId) {
+      return signedIn()
+        && requesterRole() == "student"
+        && requesterDoc().data.disabled != true
+        && requesterDoc().data.tutorId == tutorId;
+    }
+
+    function linkedStudentId() {
+      return requesterDoc().data.studentId;
+    }
+
+    function tutorCanManageStudentUser() {
+      return signedIn()
+        && requesterRole() == "tutor"
+        && request.resource.data.role == "student"
+        && request.resource.data.tutorId == request.auth.uid;
+    }
+
+    function tutorCanReadStudentUser() {
+      return signedIn()
+        && requesterRole() == "tutor"
+        && resource.data.role == "student"
+        && resource.data.tutorId == request.auth.uid;
+    }
+
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if signedIn() && (
+        request.auth.uid == userId ||
+        tutorCanReadStudentUser()
+      );
+
+      allow create: if signedIn() && (
+        (request.auth.uid == userId
+          && request.resource.data.role == "tutor"
+          && request.resource.data.tutorId == userId)
+        ||
+        tutorCanManageStudentUser()
+      );
+
+      allow update: if signedIn() && (
+        (request.auth.uid == userId
+          && resource.data.role != "student"
+          && request.resource.data.role == "tutor"
+          && request.resource.data.tutorId == userId
+          && request.resource.data.studentId == null)
+        ||
+        (tutorCanReadStudentUser()
+          && request.resource.data.role == "student"
+          && request.resource.data.tutorId == request.auth.uid)
+      );
+
+      allow delete: if false;
+
+      match /students/{studentId} {
+        allow read: if isTutorOwner(userId) || (
+          isLinkedStudent(userId) && linkedStudentId() == studentId
+        );
+        allow write: if isTutorOwner(userId);
+      }
+
+      match /transactions/{transactionId} {
+        allow read, write: if isTutorOwner(userId);
+      }
+
+      match /lessons/{lessonId} {
+        allow read: if isTutorOwner(userId) || (
+          isLinkedStudent(userId) && resource.data.studentId == linkedStudentId()
+        );
+        allow write: if isTutorOwner(userId);
+      }
+
+      match /homeworks/{homeworkId} {
+        allow read: if isTutorOwner(userId) || (
+          isLinkedStudent(userId) && resource.data.studentId == linkedStudentId()
+        );
+        allow write: if isTutorOwner(userId);
+      }
+
+      match /videos/{videoId} {
+        allow read: if isTutorOwner(userId) || (
+          isLinkedStudent(userId)
+          && (
+            resource.data.audience == "all"
+            || resource.data.studentId == linkedStudentId()
+          )
+        );
+        allow write: if isTutorOwner(userId);
+      }
 
       match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if false;
       }
     }
   }

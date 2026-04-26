@@ -24,11 +24,12 @@
       <aside class="sidebar">
         <div class="brand-mark">IN</div>
         <nav class="sidebar-nav">
-          <button class="nav-btn is-active" data-view="dashboard">Дашборд</button>
-          <button class="nav-btn" data-view="students">Ученики</button>
-          <button class="nav-btn" data-view="homework">Проверка ДЗ</button>
-          <button class="nav-btn" data-view="portals">Кабинеты</button>
-          <button class="nav-btn" data-view="calendar">Календарь</button>
+          <button class="nav-btn is-active" data-view="dashboard" data-label-tutor="Дашборд" data-label-student="Мой кабинет">Дашборд</button>
+          <button class="nav-btn" data-view="students" data-role-scope="tutor" data-label-tutor="Ученики">Ученики</button>
+          <button class="nav-btn" data-view="homework" data-label-tutor="Проверка ДЗ" data-label-student="Домашка">Проверка ДЗ</button>
+          <button class="nav-btn" data-view="portals" data-role-scope="tutor" data-label-tutor="Кабинеты">Кабинеты</button>
+          <button class="nav-btn" data-view="videos" data-label-tutor="VK-видео" data-label-student="Видео">VK-видео</button>
+          <button class="nav-btn" data-view="calendar" data-label-tutor="Календарь" data-label-student="Календарь">Календарь</button>
         </nav>
         <button class="ghost-btn sidebar-reset" id="resetDataBtn">Сбросить демо</button>
       </aside>
@@ -50,7 +51,7 @@
                 <button class="ghost-btn" id="logoutBtn">Выйти</button>
               </div>
             </div>
-            <label class="search-field">
+            <label class="search-field" id="searchField">
               <span>Поиск</span>
               <input id="searchInput" type="search" placeholder="Имя, предмет, заметка" />
             </label>
@@ -101,6 +102,25 @@
             <span>Заметки</span>
             <textarea name="notes" rows="4"></textarea>
           </label>
+          <div class="account-box full-width">
+            <div class="modal-inline-head">
+              <div>
+                <p class="eyebrow">Личный кабинет ученика</p>
+                <p class="section-subtitle">Заполни email и пароль, если хочешь сразу создать отдельный вход для ученика.</p>
+              </div>
+            </div>
+            <div class="form-grid form-grid--nested">
+              <label>
+                <span>Email ученика</span>
+                <input name="email" type="email" placeholder="student@example.com" />
+              </label>
+              <label>
+                <span>Временный пароль</span>
+                <input name="portalPassword" type="password" minlength="6" placeholder="Минимум 6 символов" />
+              </label>
+            </div>
+            <p class="field-note" id="studentAccountNote">Ученик будет видеть только свои ДЗ, календарь, занятия и видео от репетитора.</p>
+          </div>
         </div>
 
         <div class="modal-actions">
@@ -197,6 +217,10 @@
         </div>
 
         <div class="form-grid">
+          <label class="full-width">
+            <span>Ученик</span>
+            <select name="studentId"></select>
+          </label>
           <label>
             <span>Название</span>
             <input name="title" required />
@@ -225,6 +249,48 @@
           <label class="full-width">
             <span>Комментарий преподавателя</span>
             <textarea name="teacherNote" rows="3"></textarea>
+          </label>
+          <label class="full-width">
+            <span>Фото к домашнему заданию</span>
+            <input name="photoFiles" type="file" accept="image/*" multiple />
+            <small class="field-note">До 4 фото. Изображения автоматически сжимаются перед сохранением.</small>
+          </label>
+          <div class="full-width attachment-preview" id="homeworkAttachmentPreview"></div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn" data-close-modal>Отмена</button>
+          <button type="submit" class="primary-btn">Сохранить</button>
+        </div>
+      </form>
+    </template>
+
+    <template id="videoTemplate">
+      <form class="modal-form" id="videoForm">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">VK-видео</p>
+            <h2 id="videoModalTitle">Добавить VK-видео</h2>
+          </div>
+          <button type="button" class="icon-btn" data-close-modal>×</button>
+        </div>
+
+        <div class="form-grid">
+          <label class="full-width">
+            <span>Название</span>
+            <input name="title" required />
+          </label>
+          <label class="full-width">
+            <span>Кому показать</span>
+            <select name="studentId"></select>
+          </label>
+          <label class="full-width">
+            <span>Embed-ссылка VK или `src` из iframe</span>
+            <textarea name="sourceUrl" rows="4" placeholder="https://vk.com/video_ext.php?..."></textarea>
+          </label>
+          <label class="full-width">
+            <span>Описание</span>
+            <textarea name="description" rows="3"></textarea>
           </label>
         </div>
 
